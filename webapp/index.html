@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#ffffff">
+  <title>گرم‌ساز — ربات‌ساز تلگرام</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
+  <link rel="stylesheet" href="./src/styles/tokens.css">
+  <link rel="stylesheet" href="./src/styles/base.css">
+  <link rel="stylesheet" href="./src/styles/components.css">
+  <link rel="stylesheet" href="./src/styles/studio.css">
+</head>
+<body>
+  <div id="app">
+    <main id="view" class="view"></main>
+  <nav id="tabbar" class="tabbar">
+    <button class="tab" data-route="bots">🤖<span>ربات‌ها</span></button>
+    <button class="tab" data-route="studio">🧩<span>استودیو</span></button>
+    <button class="tab" data-route="profile">👤<span>پروفایل</span></button>
+    <button class="tab" data-route="admin" id="admin-tab" style="display: none;">⚙️<span>ادمین</span></button>
+  </nav>
+  </div>
+  <div id="toast-root"></div>
+  <div id="sheet-root"></div>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="./config.js"></script>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
