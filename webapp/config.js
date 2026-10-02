@@ -2,7 +2,7 @@ const config = (() => {
   const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
   
   const defaultConfig = {
-    API_URL: isDev ? 'http://localhost:8000' : 'https://botsazgram-wnw5.onrender.com',
+    API_URL: 'https://your-backend-name.onrender.com',
     WEBAPP_URL: window.location.origin,
   };
 
