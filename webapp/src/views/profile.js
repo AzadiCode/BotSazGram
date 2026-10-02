@@ -1,7 +1,7 @@
 import API from '../api.js';
 import AUTH from '../auth.js';
-import TOAST from './toast.js';
-import SHEET from './sheet.js';
+import TOAST from '../toast.js';
+import SHEET from '../sheet.js';
 
 const PROFILE_VIEW = (() => {
   let user = null;
