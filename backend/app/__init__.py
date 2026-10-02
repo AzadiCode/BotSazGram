@@ -37,8 +37,16 @@ def create_app() -> Flask:
 
     # CORS برای فرانت‌اند
     if config.CORS_ORIGINS:
-        from flask_cors import CORS
-        CORS(app, origins=list(config.CORS_ORIGINS), supports_credentials=True)
+        try:
+            from flask_cors import CORS
+        except ImportError:  # pragma: no cover
+            # نباید کل سرور از کار بیفتد؛ هدرها دستی هم فرستاده می‌شوند.
+            log.warning("flask-cors نصب نیست — هدرهای CORS دستی اعمال می‌شوند")
+            CORS = None
+        if CORS is not None:
+            CORS(app, origins=list(config.CORS_ORIGINS), supports_credentials=True)
+        else:
+            _add_manual_cors(app)
 
     # ── Storage / Repos / Services / Factory ──────────────────────────
     storage = get_storage()
@@ -72,6 +80,32 @@ def create_app() -> Flask:
         shutdown()
 
     return app
+
+
+def _add_manual_cors(app: Flask) -> None:
+    """راه‌انداز CORS وقتی flask-cors در دسترس نیست.
+
+    preflight (OPTIONS) و پاسخ‌های عادی را پوشش می‌دهد. فقط originهای
+    مجاز هدر می‌گیرند — مثل رفتار flask-cors.
+    """
+    from flask import request
+
+    @app.after_request
+    def _cors_headers(response):
+        origin = request.headers.get("Origin", "")
+        if origin and origin in config.CORS_ORIGINS:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Vary"] = "Origin"
+            if request.method == "OPTIONS":
+                response.headers["Access-Control-Allow-Methods"] = (
+                    "GET, HEAD, POST, OPTIONS, PUT, PATCH, DELETE"
+                )
+                response.headers["Access-Control-Allow-Headers"] = (
+                    "Content-Type, Authorization, X-Telegram-Init-Data, X-Device-ID"
+                )
+                response.headers["Access-Control-Max-Age"] = "600"
+        return response
 
 
 def _runner_builder(repos: Repos) -> Callable[[str, bool], bool]:
