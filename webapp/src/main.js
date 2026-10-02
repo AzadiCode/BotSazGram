@@ -121,13 +121,36 @@ async function init() {
   });
 
   ROUTER.onAfterEach(() => {
-    renderView();
+    updateTabbar(ROUTER.getCurrentRoute());
   });
 
   ROUTER.onNotFound(() => {
     const view = document.getElementById('view');
     view.innerHTML = '<div class="empty-state"><div class="empty-state-icon">❓</div><div class="empty-state-title">صفحه یافت نشد</div></div>';
     updateTabbar('/');
+  });
+
+  ROUTER.addRoute('/', () => ROUTER.navigate('/bots'));
+  ROUTER.addRoute('/bots', async () => {
+    const view = document.getElementById('view');
+    await BOTS_VIEW.init(view);
+  });
+  ROUTER.addRoute('/studio', () => ROUTER.navigate('/bots'));
+  ROUTER.addRoute('/studio/:bot_id', async (params) => {
+    const view = document.getElementById('view');
+    await STUDIO_VIEW.init(view, params.bot_id);
+  });
+  ROUTER.addRoute('/profile', async () => {
+    const view = document.getElementById('view');
+    PROFILE_VIEW.init(view);
+  });
+  ROUTER.addRoute('/admin', async () => {
+    const view = document.getElementById('view');
+    if (!AUTH.getUser()?.is_admin) {
+      view.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🚫</div><div class="empty-state-title">دسترسی محدود</div></div>';
+    } else {
+      ADMIN_VIEW.init(view);
+    }
   });
 
   initTabbar();
@@ -139,7 +162,7 @@ async function init() {
   ROUTER.start();
 }
 
-document.addEventListener('DOMContentLoaded', init);
+init();
 
 window.GramSaz = {
   API,
