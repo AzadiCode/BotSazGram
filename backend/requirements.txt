@@ -1,6 +1,6 @@
 Flask>=3.0,<4.0
 gunicorn>=21.2
-python-telegram-bot>=20.7,<21.0
+python-telegram-bot[webhooks]==22.8
 pymongo>=4.6
 requests>=2.31
 # CORS فرانت‌اند — بدون این، import flask_cors در تولید شکست می‌خورد
