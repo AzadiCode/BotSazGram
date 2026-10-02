@@ -253,7 +253,6 @@ const STUDIO_VIEW = (() => {
         </div>
       `;
     }
-    }
 
     const cardDef = registry.cards[selectedNode.kind];
     if (!cardDef) {
