@@ -836,28 +836,30 @@ const STUDIO_VIEW = (() => {
 
   function doPan(e) {
     if (!isPanning) return;
+    // جابجایی نسبی به آخرین موقعیت موس — وگرنه با هر حرکت،
+    // جابجایی از نقطهٔ شروع دوباره انباشته می‌شد.
     const dx = e.clientX - panStart.x;
     const dy = e.clientY - panStart.y;
-    const nodesContainer = container?.querySelector('.canvas-nodes');
-    if (nodesContainer) {
-      const transform = nodesContainer.style.transform || '';
-      nodesContainer.style.transform = `translate(${dx}px, ${dy}px)${transform.includes('scale') ? '' : ''}`;
-    }
+    panStart = { x: e.clientX, y: e.clientY };
+    canvasOffset.x += dx;
+    canvasOffset.y += dy;
+    applyCanvasTransform();
   }
 
   function endPan() {
     isPanning = false;
   }
 
-  function updateScale() {
+  function applyCanvasTransform() {
     const nodesContainer = container?.querySelector('.canvas-nodes');
     if (nodesContainer) {
-      const transform = nodesContainer.style.transform || '';
-      const match = transform.match(/translate\(([^,]+),\s*([^)]+)\)/);
-      let tx = 0, ty = 0;
-      if (match) { tx = parseFloat(match[1]); ty = parseFloat(match[2]); }
-      nodesContainer.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+      nodesContainer.style.transform =
+        `translate(${canvasOffset.x}px, ${canvasOffset.y}px) scale(${scale})`;
     }
+  }
+
+  function updateScale() {
+    applyCanvasTransform();
   }
 
   function startNodeDrag(e) {
@@ -871,19 +873,27 @@ const STUDIO_VIEW = (() => {
 
     nodeEl.classList.add('dragging');
 
-    const offsetX = e.clientX - nodeEl.getBoundingClientRect().left;
-    const offsetY = e.clientY - nodeEl.getBoundingClientRect().top;
+    // فاصلهٔ نقطهٔ کلیک تا گوشهٔ کارت (در فضای صفحه، شامل pan/zoom)
+    const nodeRect = nodeEl.getBoundingClientRect();
+    const offsetX = e.clientX - nodeRect.left;
+    const offsetY = e.clientY - nodeRect.top;
 
     const onMouseMove = (ev) => {
       ev.preventDefault();
-      node.x = ev.clientX - nodeEl.getBoundingClientRect().left - offsetX + node.x;
-      node.y = ev.clientY - nodeEl.getBoundingClientRect().top - offsetY + node.y;
+      // جابجایی دلخواه موس اعمال می‌شود — نه انتقال مطلق.
+      // بدون این اصلاح، کارت با هر حرکت موس پرتاب می‌شد.
+      node.x += ev.movementX;
+      node.y += ev.movementY;
+      nodeEl.style.left = `${node.x}px`;
+      nodeEl.style.top = `${node.y}px`;
     };
 
     const onMouseUp = () => {
       nodeEl.classList.remove('dragging');
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
+      renderEdges();
+      renderMinimap();
     };
 
     document.addEventListener('mousemove', onMouseMove);
@@ -1032,10 +1042,9 @@ const STUDIO_VIEW = (() => {
     validationErrors = validateFlow();
 
     const graph = {
-      nodes: nodes.map(n => {
-        const { x, y, ...rest } = n;
-        return rest;
-      }),
+      // مختصات کارت‌ها نگه داشته می‌شوند تا چیدمان بعد از بارگذاری
+      // دوباره به هم نریزد (بک‌اند clean_flow این دو فیلد را می‌پذیرد).
+      nodes: nodes.map(n => ({ ...n })),
       edges: edges.map(e => {
         const out = { from: e.from, to: e.to };
         if (e.from_port) out.from_port = e.from_port;
@@ -1059,6 +1068,16 @@ const STUDIO_VIEW = (() => {
   async function init(el, id) {
     container = el;
     botId = id;
+
+    // ریست کامل وضعیت — وگرنه کارت‌های ربات قبلی روی ربات جدید می‌مانند
+    nodes = [];
+    edges = [];
+    selectedNode = null;
+    selectedEdge = null;
+    edgeCreating = null;
+    validationErrors = [];
+    scale = 1;
+
     await loadFlow();
     registry = await API.get('/api/flow/registry').catch(e => {
       TOAST.error('خطا در بارگذاری رجیستری: ' + e.message);

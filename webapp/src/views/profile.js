@@ -320,8 +320,9 @@ const PROFILE_VIEW = (() => {
 
   function attachEvents() {
     const logoutBtn = container?.querySelector('#logout-btn');
-    logoutBtn?.addEventListener('click', () => {
-      AUTH.logout();
+    logoutBtn?.addEventListener('click', async () => {
+      // بدون await، درخواست خروج لغو می‌شد و توکن در localStorage می‌ماند.
+      await AUTH.logout();
       loadUser();
       TOAST.success('با موفقیت خارج شدید');
     });

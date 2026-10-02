@@ -76,12 +76,16 @@ const SHEET = (() => {
 
   function closeSheet() {
     if (!currentSheet) return;
-    const { el, close } = currentSheet;
+    const { el } = currentSheet;
     el.classList.remove('open');
-    el.addEventListener('transitionend', () => {
+    const cleanup = () => {
       if (el.parentNode) el.parentNode.removeChild(el);
       document.body.style.overflow = '';
-    }, { once: true });
+    };
+    // اگر transition اجرا نشد (مثلاً display:none یا بدون انیمیشن)،
+    // شیت تا ابد روی صفحه می‌ماند و بقیهٔ اپ را مسدود می‌کرد.
+    el.addEventListener('transitionend', cleanup, { once: true });
+    setTimeout(cleanup, 300);
     currentSheet = null;
   }
 
