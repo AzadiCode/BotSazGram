@@ -110,7 +110,7 @@ const BOTS_VIEW = (() => {
     });
 
     container.querySelectorAll('[data-action="settings"]').forEach(btn => {
-      showBotSettings(btn.dataset.botId);
+      btn.addEventListener('click', () => showBotSettings(btn.dataset.botId));
     });
 
     container.querySelectorAll('[data-action="toggle"]').forEach(btn => {
@@ -137,9 +137,11 @@ const BOTS_VIEW = (() => {
       const token = form.token.value.trim();
       if (!token) return;
 
-      const submitBtn = form.querySelector('button[type="submit"]');
-      submitBtn.disabled = true;
-      submitBtn.textContent = 'در حال افزودن...';
+      const submitBtn = SHEET.el?.querySelector('.sheet-footer button[type="submit"]');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'در حال افزودن...';
+      }
 
       try {
         await API.post('/api/bots', { token });
@@ -149,8 +151,10 @@ const BOTS_VIEW = (() => {
       } catch (e) {
         TOAST.error('خطا: ' + e.message);
       } finally {
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'افزودن';
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'افزودن';
+        }
       }
     });
 

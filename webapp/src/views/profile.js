@@ -16,6 +16,13 @@ const PROFILE_VIEW = (() => {
 
   async function loadUser() {
     if (loading) return;
+
+    if (!AUTH.isAuthenticated()) {
+      user = null;
+      render();
+      return;
+    }
+
     loading = true;
     render();
 
@@ -183,9 +190,11 @@ const PROFILE_VIEW = (() => {
       const password = form.password.value;
       if (!username || !password) return;
 
-      const submitBtn = form.querySelector('button[type="submit"]');
-      submitBtn.disabled = true;
-      submitBtn.textContent = 'در حال ورود...';
+      const submitBtn = SHEET.el?.querySelector('.sheet-footer button[type="submit"]');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'در حال ورود...';
+      }
 
       try {
         await AUTH.loginWithCredentials(username, password);
@@ -195,8 +204,10 @@ const PROFILE_VIEW = (() => {
       } catch (e) {
         TOAST.error('خطا: ' + e.message);
       } finally {
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'ورود';
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'ورود';
+        }
       }
     });
 
@@ -250,9 +261,11 @@ const PROFILE_VIEW = (() => {
       const referralCode = form.referral_code.value.trim();
       if (!telegramUsername || !username || !password || !code) return;
 
-      const submitBtn = form.querySelector('button[type="submit"]');
-      submitBtn.disabled = true;
-      submitBtn.textContent = 'در حال ثبت‌نام...';
+      const submitBtn = SHEET.el?.querySelector('.sheet-footer button[type="submit"]');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'در حال ثبت‌نام...';
+      }
 
       try {
         await AUTH.register(username, password, telegramUsername, referralCode, code);
@@ -262,8 +275,10 @@ const PROFILE_VIEW = (() => {
       } catch (e) {
         TOAST.error('خطا: ' + e.message);
       } finally {
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'ثبت‌نام';
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'ثبت‌نام';
+        }
       }
     });
 

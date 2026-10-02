@@ -15,6 +15,13 @@ const ADMIN_VIEW = (() => {
 
   async function loadStats() {
     if (loading) return;
+
+    if (!AUTH.getUser()?.is_admin) {
+      stats = null;
+      render();
+      return;
+    }
+
     loading = true;
     render();
 

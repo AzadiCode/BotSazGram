@@ -1,0 +1,2308 @@
+// config.js
+var config = (() => {
+  const isDev = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  const defaultConfig = {
+    API_URL: "https://botsazgram-wnw5.onrender.com",
+    WEBAPP_URL: window.location.origin
+  };
+  if (typeof window.GRAMSAZ_CONFIG !== "undefined") {
+    return Object.freeze({ ...defaultConfig, ...window.GRAMSAZ_CONFIG });
+  }
+  return Object.freeze(defaultConfig);
+})();
+var config_default = config;
+
+// src/api.js
+var API = (() => {
+  let baseUrl = window.GRAMSAZ_CONFIG?.API_URL || "";
+  let authToken = null;
+  let initData = null;
+  function setBaseUrl(url) {
+    baseUrl = url || "";
+  }
+  function getBaseUrl() {
+    return baseUrl;
+  }
+  function setAuthToken(token) {
+    authToken = token;
+  }
+  function setInitData(data) {
+    initData = data;
+  }
+  function getHeaders(extra = {}) {
+    const headers = {
+      "Content-Type": "application/json",
+      ...extra
+    };
+    if (initData) {
+      headers["X-Telegram-Init-Data"] = initData;
+    } else if (authToken) {
+      headers["Authorization"] = `Bearer ${authToken}`;
+    }
+    return headers;
+  }
+  async function request(path, options = {}) {
+    const url = `${baseUrl}${path}`;
+    const config2 = {
+      ...options,
+      headers: getHeaders(options.headers)
+    };
+    try {
+      const response = await fetch(url, config2);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error(data.error || `HTTP ${response.status}`);
+        error.status = response.status;
+        error.data = data;
+        throw error;
+      }
+      return data;
+    } catch (e) {
+      if (e instanceof TypeError && e.message.includes("fetch")) {
+        const error = new Error("\u062E\u0637\u0627\u06CC \u0634\u0628\u06A9\u0647 \u2014 \u0633\u0631\u0648\u0631 \u062F\u0631 \u062F\u0633\u062A\u0631\u0633 \u0646\u06CC\u0633\u062A");
+        error.isNetworkError = true;
+        throw error;
+      }
+      throw e;
+    }
+  }
+  const api = {
+    setBaseUrl,
+    getBaseUrl,
+    get: (path) => request(path, { method: "GET" }),
+    post: (path, body) => request(path, { method: "POST", body: JSON.stringify(body) }),
+    put: (path, body) => request(path, { method: "PUT", body: JSON.stringify(body) }),
+    patch: (path, body) => request(path, { method: "PATCH", body: JSON.stringify(body) }),
+    delete: (path) => request(path, { method: "DELETE" }),
+    setAuthToken,
+    setInitData,
+    getAuthToken: () => authToken,
+    getInitData: () => initData
+  };
+  return api;
+})();
+var api_default = API;
+
+// src/auth.js
+var AUTH = /* @__PURE__ */ (() => {
+  const STORAGE_KEY = "gramsaaz_auth";
+  const DEVICE_KEY = "gramsaaz_device";
+  let currentUser = null;
+  let listeners = [];
+  function notify() {
+    listeners.forEach((fn) => fn(currentUser));
+  }
+  function loadFromStorage() {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const data = JSON.parse(stored);
+        currentUser = data.user;
+        if (data.token) api_default.setAuthToken(data.token);
+        if (data.initData) api_default.setInitData(data.initData);
+      }
+    } catch (e) {
+      console.warn("Failed to load auth from storage:", e);
+    }
+  }
+  function saveToStorage() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        user: currentUser,
+        token: api_default.getAuthToken(),
+        initData: api_default.getInitData()
+      }));
+    } catch (e) {
+      console.warn("Failed to save auth to storage:", e);
+    }
+  }
+  function clearStorage() {
+    localStorage.removeItem(STORAGE_KEY);
+  }
+  function getDeviceId() {
+    try {
+      let id = localStorage.getItem(DEVICE_KEY);
+      if (!id) {
+        id = "web_" + Math.random().toString(36).substring(2, 15);
+        localStorage.setItem(DEVICE_KEY, id);
+      }
+      return id;
+    } catch (e) {
+      return "";
+    }
+  }
+  async function loginWithInitData(initData) {
+    api_default.setInitData(initData);
+    const user = await api_default.get("/api/auth/me");
+    currentUser = user;
+    saveToStorage();
+    notify();
+    return user;
+  }
+  async function loginWithCredentials(username, password) {
+    const data = await api_default.post("/api/auth/login", {
+      username,
+      password,
+      device_id: getDeviceId()
+    });
+    api_default.setAuthToken(data.token);
+    api_default.setInitData(null);
+    currentUser = data.user;
+    saveToStorage();
+    notify();
+    return data.user;
+  }
+  async function sendCode(telegramUsername) {
+    const data = await api_default.post("/api/auth/send-code", {
+      telegram_username: telegramUsername,
+      device_id: getDeviceId()
+    });
+    return {
+      sent: data.sent,
+      code: data.code,
+      message: data.message
+    };
+  }
+  async function register(username, password, telegramUsername, referralCode, code) {
+    const data = await api_default.post("/api/auth/register", {
+      username,
+      password,
+      telegram_username: telegramUsername,
+      referral_code: referralCode,
+      code,
+      device_id: getDeviceId()
+    });
+    api_default.setAuthToken(data.token);
+    api_default.setInitData(null);
+    currentUser = data.user;
+    saveToStorage();
+    notify();
+    return data.user;
+  }
+  async function refreshUser() {
+    if (!currentUser) return null;
+    try {
+      const user = await api_default.get("/api/auth/me");
+      currentUser = user;
+      saveToStorage();
+      notify();
+      return user;
+    } catch (e) {
+      logout();
+      throw e;
+    }
+  }
+  async function logout() {
+    const token = api_default.getAuthToken();
+    if (token) {
+      try {
+        await api_default.post("/api/auth/logout");
+      } catch (e) {
+        console.warn("Logout API error:", e);
+      }
+    }
+    currentUser = null;
+    api_default.setAuthToken(null);
+    api_default.setInitData(null);
+    clearStorage();
+    notify();
+  }
+  function getUser() {
+    return currentUser;
+  }
+  function isAuthenticated() {
+    return !!currentUser;
+  }
+  function onAuthChange(fn) {
+    listeners.push(fn);
+    return () => {
+      listeners = listeners.filter((l) => l !== fn);
+    };
+  }
+  function getInitDataFromURL() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("initData") || params.get("tgWebAppData");
+  }
+  function getInitDataFromTelegramWebApp() {
+    if (window.Telegram?.WebApp?.initData) {
+      return window.Telegram.WebApp.initData;
+    }
+    return null;
+  }
+  async function tryAutoLogin() {
+    loadFromStorage();
+    if (currentUser) {
+      try {
+        await refreshUser();
+        return currentUser;
+      } catch (e) {
+        return null;
+      }
+    }
+    const initData = getInitDataFromTelegramWebApp() || getInitDataFromURL();
+    if (initData) {
+      try {
+        return await loginWithInitData(initData);
+      } catch (e) {
+        console.warn("Auto login with initData failed:", e);
+        return null;
+      }
+    }
+    return null;
+  }
+  return {
+    loginWithInitData,
+    loginWithCredentials,
+    sendCode,
+    register,
+    refreshUser,
+    logout,
+    getUser,
+    isAuthenticated,
+    onAuthChange,
+    tryAutoLogin,
+    getDeviceId
+  };
+})();
+var auth_default = AUTH;
+
+// src/toast.js
+var TOAST = (() => {
+  const container = document.getElementById("toast-root");
+  let toastId = 0;
+  function createToast(message, type = "info", duration = 4e3) {
+    if (!container) return;
+    const id = ++toastId;
+    const icons = {
+      success: "\u2713",
+      error: "\u2715",
+      warning: "\u26A0",
+      info: "\u2139"
+    };
+    const el = document.createElement("div");
+    el.className = `toast toast-${type}`;
+    el.innerHTML = `
+      <span class="toast-icon">${icons[type] || icons.info}</span>
+      <span class="toast-content">${escapeHtml(message)}</span>
+      <button class="toast-close" aria-label="\u0628\u0633\u062A\u0646">\u2715</button>
+    `;
+    const closeBtn = el.querySelector(".toast-close");
+    closeBtn.addEventListener("click", () => removeToast(el));
+    container.appendChild(el);
+    if (duration > 0) {
+      setTimeout(() => removeToast(el), duration);
+    }
+    return el;
+  }
+  function removeToast(el) {
+    if (!el || !el.parentNode) return;
+    el.classList.add("removing");
+    el.addEventListener("animationend", () => {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    }, { once: true });
+  }
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+  return {
+    success: (msg, dur) => createToast(msg, "success", dur),
+    error: (msg, dur) => createToast(msg, "error", dur),
+    warning: (msg, dur) => createToast(msg, "warning", dur),
+    info: (msg, dur) => createToast(msg, "info", dur),
+    show: createToast
+  };
+})();
+var toast_default = TOAST;
+
+// src/router.js
+var ROUTER = (() => {
+  const BASE = (() => {
+    try {
+      const p = new URL(document.baseURI).pathname;
+      return p.replace(/[^/]*$/, "");
+    } catch (e) {
+      return "/";
+    }
+  })();
+  const routes = /* @__PURE__ */ new Map();
+  let currentRoute = null;
+  let currentParams = {};
+  let beforeEachHooks = [];
+  let afterEachHooks = [];
+  let notFoundHandler = null;
+  function withBase(path) {
+    return BASE + path.replace(/^\//, "");
+  }
+  function stripBase(path) {
+    if (BASE !== "/" && path.startsWith(BASE)) {
+      return "/" + path.slice(BASE.length);
+    }
+    return path;
+  }
+  function parseRoute(path) {
+    const paramNames = [];
+    const regexPattern = path.replace(/:([^/]+)/g, (_, name) => {
+      paramNames.push(name);
+      return "([^/]+)";
+    }).replace(/\*/g, ".*");
+    return {
+      regex: new RegExp(`^${regexPattern}$`),
+      paramNames
+    };
+  }
+  function matchRoute(path) {
+    for (const [routePath, handler] of routes) {
+      const { regex, paramNames } = parseRoute(routePath);
+      const match = path.match(regex);
+      if (match) {
+        const params = {};
+        paramNames.forEach((name, i) => {
+          params[name] = decodeURIComponent(match[i + 1]);
+        });
+        return { handler, params };
+      }
+    }
+    return null;
+  }
+  async function navigate(path, replace = false) {
+    const route = stripBase(path);
+    const match = matchRoute(route);
+    if (!match) {
+      if (notFoundHandler) {
+        await notFoundHandler(route);
+      } else {
+        console.warn("Route not found:", route);
+      }
+      return false;
+    }
+    for (const hook of beforeEachHooks) {
+      const result = await hook(route, match.params);
+      if (result === false) return false;
+    }
+    if (replace) {
+      history.replaceState(null, "", withBase(route));
+    } else {
+      history.pushState(null, "", withBase(route));
+    }
+    currentRoute = route;
+    currentParams = match.params;
+    try {
+      await match.handler(match.params);
+    } catch (e) {
+      console.error("Route handler error:", e);
+    }
+    for (const hook of afterEachHooks) {
+      await hook(route, match.params);
+    }
+    return true;
+  }
+  function addRoute(path, handler) {
+    routes.set(path, handler);
+  }
+  function onBeforeEach(fn) {
+    beforeEachHooks.push(fn);
+  }
+  function onAfterEach(fn) {
+    afterEachHooks.push(fn);
+  }
+  function onNotFound(fn) {
+    notFoundHandler = fn;
+  }
+  function getCurrentRoute() {
+    return currentRoute;
+  }
+  function getCurrentParams() {
+    return currentParams;
+  }
+  function start() {
+    window.addEventListener("popstate", () => {
+      navigate(location.pathname + location.search, true);
+    });
+    navigate(location.pathname + location.search, true);
+  }
+  function goBack() {
+    history.back();
+  }
+  return {
+    addRoute,
+    navigate,
+    onBeforeEach,
+    onAfterEach,
+    onNotFound,
+    getCurrentRoute,
+    getCurrentParams,
+    start,
+    goBack
+  };
+})();
+var router_default = ROUTER;
+
+// src/sheet.js
+var SHEET = (() => {
+  const root = document.getElementById("sheet-root");
+  let currentSheet = null;
+  let sheetSeq = 0;
+  function createSheet(content, options = {}) {
+    if (!root) return null;
+    closeSheet();
+    const { title = "", showHandle = true, footer = null } = options;
+    const el = document.createElement("div");
+    el.className = "sheet-root";
+    el.innerHTML = `
+      <div class="sheet-backdrop"></div>
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+        ${showHandle ? '<div class="sheet-handle"></div>' : ""}
+        <div class="sheet-header">
+          <h3 id="sheet-title" class="sheet-title">${escapeHtml(title)}</h3>
+          <button class="sheet-close" aria-label="\u0628\u0633\u062A\u0646">\u2715</button>
+        </div>
+        <div class="sheet-content"></div>
+        ${footer ? '<div class="sheet-footer"></div>' : ""}
+      </div>
+    `;
+    const contentEl = el.querySelector(".sheet-content");
+    if (typeof content === "string") {
+      contentEl.innerHTML = content;
+    } else if (content instanceof Node) {
+      contentEl.appendChild(content);
+    }
+    const formEl = content instanceof HTMLFormElement ? content : null;
+    if (formEl && !formEl.id) {
+      formEl.id = `gs-sheet-form-${++sheetSeq}`;
+    }
+    if (footer) {
+      const footerEl = el.querySelector(".sheet-footer");
+      if (typeof footer === "string") {
+        footerEl.innerHTML = footer;
+      } else if (footer instanceof Node) {
+        footerEl.appendChild(footer);
+      }
+      if (formEl) {
+        footerEl.querySelectorAll('button[type="submit"]').forEach((btn) => {
+          btn.setAttribute("form", formEl.id);
+        });
+      }
+    }
+    const backdrop = el.querySelector(".sheet-backdrop");
+    const closeBtn = el.querySelector(".sheet-close");
+    const sheet = el.querySelector(".sheet");
+    const close = () => closeSheet();
+    backdrop.addEventListener("click", close);
+    closeBtn.addEventListener("click", close);
+    document.body.appendChild(el);
+    document.body.style.overflow = "hidden";
+    requestAnimationFrame(() => {
+      el.classList.add("open");
+    });
+    currentSheet = { el, close };
+    return { el, close };
+  }
+  function closeSheet() {
+    if (!currentSheet) return;
+    const { el, close } = currentSheet;
+    el.classList.remove("open");
+    el.addEventListener("transitionend", () => {
+      if (el.parentNode) el.parentNode.removeChild(el);
+      document.body.style.overflow = "";
+    }, { once: true });
+    currentSheet = null;
+  }
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+  return {
+    open: createSheet,
+    close: closeSheet,
+    get el() {
+      return currentSheet?.el || null;
+    }
+  };
+})();
+var sheet_default = SHEET;
+
+// src/views/bots.js
+var BOTS_VIEW = /* @__PURE__ */ (() => {
+  let bots = [];
+  let loading = false;
+  let container = null;
+  function renderBotCard(bot) {
+    const statusClass = bot.is_active ? "badge-success" : "badge-neutral";
+    const statusText = bot.is_active ? "\u0641\u0639\u0627\u0644" : "\u063A\u06CC\u0631\u0641\u0639\u0627\u0644";
+    const runningClass = bot.is_running ? "badge-primary" : "badge-neutral";
+    const runningText = bot.is_running ? "\u062F\u0631 \u062D\u0627\u0644 \u0627\u062C\u0631\u0627" : "\u0645\u062A\u0648\u0642\u0641";
+    return `
+      <article class="card" data-bot-id="${bot.bot_id}">
+        <div class="card-header">
+          <div>
+             <div class="card-title">@${escapeHtml(bot.username || "\u0628\u062F\u0648\u0646 \u0646\u0627\u0645")}</div>
+             <div class="text-sm text-muted">${escapeHtml(bot.bot_id || "unknown")}</div>
+          </div>
+          <div class="card-actions">
+            <span class="badge ${statusClass}">${statusText}</span>
+            <span class="badge ${runningClass}">${runningText}</span>
+          </div>
+        </div>
+        <div class="flex gap-2 mb-3">
+          <button class="btn btn-secondary btn-sm flex-1" data-action="studio" data-bot-id="${bot.bot_id}">
+            \u{1F9E9} \u0627\u0633\u062A\u0648\u062F\u06CC\u0648
+          </button>
+          <button class="btn btn-secondary btn-sm flex-1" data-action="settings" data-bot-id="${bot.bot_id}">
+            \u2699 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A
+          </button>
+        </div>
+        <div class="flex gap-2">
+          <button class="btn btn-primary btn-sm flex-1" data-action="toggle" data-bot-id="${bot.bot_id}">
+            ${bot.is_active ? "\u063A\u06CC\u0631\u0641\u0639\u0627\u0644 \u06A9\u0631\u062F\u0646" : "\u0641\u0639\u0627\u0644 \u06A9\u0631\u062F\u0646"}
+          </button>
+          <button class="btn btn-danger btn-sm flex-1" data-action="delete" data-bot-id="${bot.bot_id}">
+            \u062D\u0630\u0641
+          </button>
+        </div>
+      </article>
+    `;
+  }
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+  async function loadBots() {
+    if (loading) return;
+    loading = true;
+    render();
+    try {
+      const data = await api_default.get("/api/bots");
+      bots = data.bots || [];
+    } catch (e) {
+      toast_default.error("\u062E\u0637\u0627 \u062F\u0631 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u0631\u0628\u0627\u062A\u200C\u0647\u0627: " + e.message);
+      bots = [];
+    } finally {
+      loading = false;
+      render();
+    }
+  }
+  function render() {
+    if (!container) return;
+    let html = `
+      <div class="page-header">
+        <h1 class="page-title">\u0631\u0628\u0627\u062A\u200C\u0647\u0627\u06CC \u0645\u0646</h1>
+        <button class="btn btn-primary" id="add-bot-btn">+ \u0627\u0641\u0632\u0648\u062F\u0646 \u0631\u0628\u0627\u062A</button>
+      </div>
+    `;
+    if (loading) {
+      html += `<div class="loading-state"><div class="spinner"></div>\u062F\u0631 \u062D\u0627\u0644 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC...</div>`;
+    } else if (bots.length === 0) {
+      html += `
+        <div class="empty-state">
+          <div class="empty-state-icon">\u{1F916}</div>
+          <div class="empty-state-title">\u0647\u0646\u0648\u0632 \u0631\u0628\u0627\u062A\u06CC \u0646\u062F\u0627\u0631\u06CC\u062F</div>
+          <div class="empty-state-desc">\u0627\u0648\u0644\u06CC\u0646 \u0631\u0628\u0627\u062A \u062E\u0648\u062F \u0631\u0627 \u0628\u0633\u0627\u0632\u06CC\u062F \u0648 \u0645\u062F\u06CC\u0631\u06CC\u062A \u06A9\u0646\u06CC\u062F</div>
+        </div>
+      `;
+    } else {
+      html += bots.map(renderBotCard).join("");
+    }
+    container.innerHTML = html;
+    attachEvents();
+  }
+  function attachEvents() {
+    if (!container) return;
+    container.querySelector("#add-bot-btn")?.addEventListener("click", showAddBotSheet);
+    container.querySelectorAll('[data-action="studio"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        router_default.navigate(`/studio/${btn.dataset.botId}`);
+      });
+    });
+    container.querySelectorAll('[data-action="settings"]').forEach((btn) => {
+      btn.addEventListener("click", () => showBotSettings(btn.dataset.botId));
+    });
+    container.querySelectorAll('[data-action="toggle"]').forEach((btn) => {
+      btn.addEventListener("click", () => toggleBot(btn.dataset.botId));
+    });
+    container.querySelectorAll('[data-action="delete"]').forEach((btn) => {
+      btn.addEventListener("click", () => deleteBot(btn.dataset.botId));
+    });
+  }
+  function showAddBotSheet() {
+    const form = document.createElement("form");
+    form.innerHTML = `
+      <div class="input-group">
+        <label>\u062A\u0648\u06A9\u0646 \u0631\u0628\u0627\u062A</label>
+        <input type="text" name="token" placeholder="123456:ABC-DEF..." required autocomplete="off">
+        <div class="input-hint">\u062A\u0648\u06A9\u0646 \u0631\u0627 \u0627\u0632 @BotFather \u062F\u0631\u06CC\u0627\u0641\u062A \u06A9\u0646\u06CC\u062F</div>
+      </div>
+    `;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const token = form.token.value.trim();
+      if (!token) return;
+      const submitBtn = sheet_default.el?.querySelector('.sheet-footer button[type="submit"]');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = "\u062F\u0631 \u062D\u0627\u0644 \u0627\u0641\u0632\u0648\u062F\u0646...";
+      }
+      try {
+        await api_default.post("/api/bots", { token });
+        toast_default.success("\u0631\u0628\u0627\u062A \u0628\u0627 \u0645\u0648\u0641\u0642\u06CC\u062A \u0627\u0641\u0632\u0648\u062F\u0647 \u0634\u062F");
+        sheet_default.close();
+        await loadBots();
+      } catch (e2) {
+        toast_default.error("\u062E\u0637\u0627: " + e2.message);
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "\u0627\u0641\u0632\u0648\u062F\u0646";
+        }
+      }
+    });
+    sheet_default.open(form, {
+      title: "\u0627\u0641\u0632\u0648\u062F\u0646 \u0631\u0628\u0627\u062A \u062C\u062F\u06CC\u062F",
+      footer: `
+        <button type="button" class="btn btn-secondary" onclick="this.closest('.sheet-root').querySelector('.sheet-close').click()">\u0627\u0646\u0635\u0631\u0627\u0641</button>
+        <button type="submit" form="${form.id || ""}" class="btn btn-primary">\u0627\u0641\u0632\u0648\u062F\u0646</button>
+      `
+    });
+    form.querySelector("input").focus();
+  }
+  async function toggleBot(botId) {
+    const bot = bots.find((b) => b.bot_id === botId);
+    if (!bot) return;
+    try {
+      await api_default.patch(`/api/bots/${botId}`, { is_active: !bot.is_active });
+      toast_default.success(bot.is_active ? "\u0631\u0628\u0627\u062A \u063A\u06CC\u0631\u0641\u0639\u0627\u0644 \u0634\u062F" : "\u0631\u0628\u0627\u062A \u0641\u0639\u0627\u0644 \u0634\u062F");
+      await loadBots();
+    } catch (e) {
+      toast_default.error("\u062E\u0637\u0627: " + e.message);
+    }
+  }
+  async function deleteBot(botId) {
+    const bot = bots.find((b) => b.bot_id === botId);
+    if (!bot) return;
+    if (!confirm(`\u0622\u06CC\u0627 \u0627\u0632 \u062D\u0630\u0641 \u0631\u0628\u0627\u062A @${bot.username} \u0645\u0637\u0645\u0626\u0646 \u0647\u0633\u062A\u06CC\u062F\u061F`)) return;
+    try {
+      await api_default.delete(`/api/bots/${botId}`);
+      toast_default.success("\u0631\u0628\u0627\u062A \u062D\u0630\u0641 \u0634\u062F");
+      await loadBots();
+    } catch (e) {
+      toast_default.error("\u062E\u0637\u0627: " + e.message);
+    }
+  }
+  function showBotSettings(botId) {
+    const bot = bots.find((b) => b.bot_id === botId);
+    if (!bot) return;
+    const form = document.createElement("form");
+    form.innerHTML = `
+      <div class="input-group">
+        <label>\u0646\u0627\u0645 \u06A9\u0627\u0631\u0628\u0631\u06CC</label>
+        <input type="text" name="username" value="${escapeHtml(bot.username || "")}" disabled>
+        <div class="input-hint">\u0646\u0627\u0645 \u06A9\u0627\u0631\u0628\u0631\u06CC \u0627\u0632 \u062A\u0644\u06AF\u0631\u0627\u0645 \u062F\u0631\u06CC\u0627\u0641\u062A \u0645\u06CC\u200C\u0634\u0648\u062F</div>
+      </div>
+      <div class="input-group">
+        <label>\u0648\u0636\u0639\u06CC\u062A</label>
+        <select name="is_active" disabled>
+          <option value="true" ${bot.is_active ? "selected" : ""}>\u0641\u0639\u0627\u0644</option>
+          <option value="false" ${!bot.is_active ? "selected" : ""}>\u063A\u06CC\u0631\u0641\u0639\u0627\u0644</option>
+        </select>
+      </div>
+      <div class="input-group">
+        <label> \u062A\u0648\u06A9\u0646 (\u0645\u062E\u0641\u06CC)</label>
+        <input type="password" value="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" disabled>
+      </div>
+    `;
+    sheet_default.open(form, {
+      title: `\u062A\u0646\u0638\u06CC\u0645\u0627\u062A @${escapeHtml(bot.username)}`,
+      footer: `
+        <button type="button" class="btn btn-secondary" onclick="this.closest('.sheet-root').querySelector('.sheet-close').click()">\u0628\u0633\u062A\u0646</button>
+      `
+    });
+  }
+  function init2(el) {
+    container = el;
+    loadBots();
+    auth_default.onAuthChange(() => {
+      if (auth_default.isAuthenticated()) {
+        loadBots();
+      } else {
+        bots = [];
+        render();
+      }
+    });
+  }
+  return { init: init2, loadBots };
+})();
+var bots_default = BOTS_VIEW;
+
+// src/views/studio.js
+var STUDIO_VIEW = /* @__PURE__ */ (() => {
+  let registry = null;
+  let flow = null;
+  let botId = null;
+  let selectedNode = null;
+  let selectedEdge = null;
+  let edgeCreating = null;
+  let validationErrors = [];
+  let canvasOffset = { x: 0, y: 0 };
+  let isPanning = false;
+  let panStart = { x: 0, y: 0 };
+  let nodes = [];
+  let edges = [];
+  let scale = 1;
+  let container = null;
+  function renderHeader() {
+    return `
+      <div class="studio-header">
+        <div class="flex items-center gap-3">
+          <button class="btn btn-ghost btn-sm" id="back-btn">\u2190 \u0628\u0627\u0632\u06AF\u0634\u062A</button>
+          <span class="page-title">\u0627\u0633\u062A\u0648\u062F\u06CC\u0648</span>
+          ${botId ? `<span class="badge badge-neutral mx-2">@${botId.substring(0, 8)}...</span>` : ""}
+        </div>
+         <div class="studio-toolbar">
+           <button class="btn btn-secondary btn-sm" id="save-btn">\u{1F4BE} \u0630\u062E\u06CC\u0631\u0647</button>
+           <button class="btn btn-primary btn-sm" id="add-node-btn">\u2795 \u0627\u0641\u0632\u0648\u062F\u0646</button>
+           ${edgeCreating ? '<button class="btn btn-danger btn-sm" id="cancel-edge-btn">\u2715 \u0644\u063A\u0648 \u06CC\u0627\u0644</button>' : ""}
+         </div>
+      </div>
+       <div class="flow-info-bar" id="flow-info">
+         <span class="flow-info-item">\u{1F7E2} ${nodes.length} \u06A9\u0627\u0631\u062A</span>
+         <span class="flow-info-item">\u{1F517} ${edges.length} \u0627\u0631\u062A\u0628\u0627\u0637</span>
+         ${validationErrors.length ? `<span class="flow-info-item" style="color: var(--color-danger);">\u26A0 ${validationErrors.length} \u062E\u0637\u0627</span>` : ""}
+       </div>
+    `;
+  }
+  function render() {
+    if (!container) return;
+    let html = renderHeader();
+    if (!registry) {
+      html += '<div class="loading-state"><div class="spinner"></div>\u062F\u0631 \u062D\u0627\u0644 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u0631\u062C\u06CC\u0633\u062A\u0631\u06CC...</div>';
+      container.innerHTML = html;
+      return;
+    }
+    if (validationErrors.length > 0) {
+      html += `
+        <div class="validation-errors">
+          <div class="validation-errors-title">\u26A0 \u062E\u0637\u0627\u0647\u0627 \u062F\u0631 \u06AF\u0631\u0627\u0641:</div>
+          ${validationErrors.map((e) => `<div class="validation-error">\u2022 ${escapeHtml(e)}</div>`).join("")}
+        </div>
+      `;
+    }
+    html += `
+      <div class="studio-body">
+        <div class="studio-sidebar" id="palette-sidebar">
+          <div class="sidebar-tabs">
+            <button class="sidebar-tab active" data-tab="palette">\u{1F9E9} \u06A9\u0627\u0631\u062A\u200C\u0647\u0627</button>
+            <button class="sidebar-tab" data-tab="settings">\u2699 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A</button>
+          </div>
+          <div class="sidebar-content">
+            <div class="tab-content" id="palette-tab">
+              ${renderPalette()}
+            </div>
+            <div class="tab-content" style="display:none;" id="settings-tab">
+              ${renderSettings()}
+            </div>
+          </div>
+        </div>
+        <div class="studio-canvas">
+          <div class="canvas-wrapper" id="canvas-wrapper">
+            <div class="canvas-grid" id="canvas-grid"></div>
+            <div class="canvas-nodes" id="canvas-nodes"></div>
+            <svg class="canvas-edges" id="canvas-edges">
+              <defs>
+                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                  <polygon points="0 0, 8 3.5, 0 7" fill="var(--color-border-strong)" />
+                </marker>
+              </defs>
+            </svg>
+            <div class="canvas-controls">
+              <button class="canvas-btn" id="zoom-in">\u{1F50D}</button>
+              <button class="canvas-btn" id="zoom-out">\u{1F52C}</button>
+              <button class="canvas-btn" id="zoom-reset">\u26AA</button>
+              <button class="canvas-btn" id="duplicate-btn" title="Duplicate (Ctrl+D)">\u{1F4CB}</button>
+            </div>
+          </div>
+          <div class="canvas-minimap" id="canvas-minimap">
+            <div class="minimap-viewport" id="minimap-viewport"></div>
+          </div>
+        </div>
+        ${selectedNode || selectedEdge || edgeCreating ? '<div class="node-properties-panel open" id="properties-panel">' + renderProperties() + "</div>" : '<div id="properties-panel-placeholder" style="display:none;"></div>'}
+      </div>
+    `;
+    container.innerHTML = html;
+    attachEvents();
+    renderCanvas();
+    renderEdges();
+    renderMinimap();
+    validationErrors = validateFlow();
+  }
+  function renderPalette(paletteFilter = "") {
+    const categories = registry.cats;
+    const filter = paletteFilter.toLowerCase().trim();
+    let html = `
+      <div class="palette-search">
+        <input type="text" id="palette-search" class="palette-search-input" placeholder="\u062C\u0633\u062A\u062C\u0648 \u06A9\u0627\u0631\u062A..." value="${escapeHtml(paletteFilter)}" />
+      </div>
+      <div class="card-palette">
+    `;
+    const byCategory = {};
+    for (const [kind, card] of Object.entries(registry.cards)) {
+      if (card.cat === "int") continue;
+      if (filter && !kind.toLowerCase().includes(filter) && !card.label.toLowerCase().includes(filter)) continue;
+      if (!byCategory[card.cat]) byCategory[card.cat] = [];
+      byCategory[card.cat].push({ kind, ...card });
+    }
+    let noResults = filter && Object.keys(byCategory).every((c) => byCategory[c].length === 0);
+    for (const [catId, catLabel] of Object.entries(categories)) {
+      if (!byCategory[catId] || byCategory[catId].length === 0) continue;
+      html += `<div class="palette-category">`;
+      html += `<div class="palette-category-title">${catLabel}</div>`;
+      html += `<div class="palette-items">`;
+      for (const card of byCategory[catId]) {
+        html += `
+          <div class="palette-item" data-card-kind="${card.kind}" draggable="true">
+            <span class="palette-item-icon">${getCardIcon(card.kind)}</span>
+            <span class="palette-item-label">${card.label}</span>
+          </div>
+        `;
+      }
+      html += `</div></div>`;
+    }
+    html += "</div>";
+    return html;
+  }
+  function getCardIcon(kind) {
+    const icons = {
+      cmd: "\u29C9",
+      reply: "\u21A9",
+      image: "\u{1F5BC}",
+      album: "\u{1F4DA}",
+      link: "\u{1F517}",
+      ticket: "\u{1F3AB}",
+      trigger: "\u{1F50D}",
+      input: "\u2328",
+      menu: "\u2630",
+      keyboard: "\u2328",
+      condition: "?",
+      setvar: "\u229A",
+      random: "\u{1F3B2}",
+      notify: "\u{1F514}",
+      delay: "\u23F1",
+      api: "\u{1F310}",
+      ai: "\u{1F9E0}"
+    };
+    return icons[kind] || "\u2022";
+  }
+  function renderSettings() {
+    const aiSection = registry && (botId ? `<div class="input-group">
+          <label>\u0647\u0648\u0634 \u0645\u0635\u0646\u0648\u0639\u06CC</label>
+          <div class="ai-status" id="ai-status">
+            <div class="spinner" style="display:none"></div>
+            <span>\u062F\u0631 \u062D\u0627\u0644 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC...</span>
+          </div>
+        </div>` : "");
+    return `
+      <div class="input-group">
+        <label>\u0646\u0627\u0645 \u0631\u0628\u0627\u062A</label>
+        <input type="text" id="bot-name" placeholder="\u0646\u0627\u0645 \u0631\u0628\u0627\u062A...">
+      </div>
+      <div class="input-group">
+        <label>\u062A\u0648\u06A9\u0646 \u0631\u0628\u0627\u062A</label>
+        <input type="text" id="bot-token" placeholder="\u062A\u0648\u06A9\u0646..." disabled>
+      </div>
+      ${aiSection}
+    `;
+  }
+  function renderProperties() {
+    if (selectedEdge) {
+      const headerHtml2 = `
+        <div class="properties-header">
+          <h3 class="properties-title">\u{1F517} \u06CC\u0627\u0644</h3>
+          <button class="sheet-close" id="close-properties">\u2715</button>
+        </div>
+      `;
+      const content = `
+        <div class="properties-content">
+          <div class="property-row">
+            <span class="property-label">\u0627\u0632</span>
+            <span class="property-value" style="direction: ltr;">${escapeHtml(selectedEdge.from)}</span>
+          </div>
+          <div class="property-row">
+            <span class="property-label">\u0628\u0647</span>
+            <span class="property-value" style="direction: ltr;">${escapeHtml(selectedEdge.to)}</span>
+          </div>
+          <div class="property-row">
+            <span class="property-label">\u067E\u0648\u0631\u062A \u0645\u0628\u062F\u0623</span>
+            <span class="property-value">${escapeHtml(selectedEdge.from_port || "run")}</span>
+          </div>
+          <div class="property-row">
+            <span class="property-label">\u067E\u0648\u0631\u062A \u0645\u0642\u0635\u062F</span>
+            <span class="property-value">${escapeHtml(selectedEdge.to_port || "run")}</span>
+          </div>
+          <div class="property-row">
+            <button class="btn btn-danger btn-sm" id="delete-edge-btn" style="width: 100%;">\u{1F5D1} \u062D\u0630\u0641 \u06CC\u0627\u0644</button>
+          </div>
+        </div>
+      `;
+      return headerHtml2 + content;
+    }
+    if (edgeCreating) {
+      return `
+        <div class="properties-header">
+          <h3 class="properties-title">\u2795 \u062F\u0631 \u062D\u0627\u0644 \u0633\u0627\u062E\u062A \u06CC\u0627\u0644</h3>
+          <button class="sheet-close" id="close-properties">\u2715</button>
+        </div>
+        <div class="properties-content">
+          <div class="text-muted">\u0631\u0648\u06CC \u06CC\u06A9 \u067E\u0648\u0631\u062A \u062F\u06CC\u06AF\u0631 \u06A9\u0644\u06CC\u06A9 \u06A9\u0646\u06CC\u062F \u06CC\u0627 Esc \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F</div>
+        </div>
+      `;
+    }
+    if (!selectedNode) {
+      return `
+        <div class="properties-empty">
+          <div class="properties-empty-icon">\u2699</div>
+          <div class="properties-empty-title">\u0647\u06CC\u0686 \u06A9\u0627\u0631\u062A\u06CC \u0627\u0646\u062A\u062E\u0627\u0628 \u0646\u0634\u062F\u0647</div>
+          <div class="properties-empty-desc">\u06A9\u0627\u0631\u062A\u06CC \u0631\u0627 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646\u06CC\u062F \u06CC\u0627 \u0631\u0648\u06CC \u06CC\u06A9 \u067E\u0648\u0631\u062A \u06A9\u0644\u06CC\u06A9 \u06A9\u0646\u06CC\u062F \u062A\u0627 \u06CC\u0627\u0644 \u0628\u06A9\u0634\u06CC\u062F</div>
+        </div>
+      `;
+    }
+    const cardDef = registry.cards[selectedNode.kind];
+    if (!cardDef) {
+      return '<div class="properties-content"><div class="text-muted">\u06A9\u0627\u0631\u062A \u0646\u0627\u0634\u0646\u0627\u0633</div></div>';
+    }
+    let fieldsHtml = "";
+    for (const field of cardDef.fields) {
+      const value = selectedNode[field.name] ?? field.default ?? "";
+      fieldsHtml += `
+        <div class="node-field">
+          <label class="node-field-label">
+            ${escapeHtml(field.label)}
+            ${field.required ? '<span class="node-field-required">*</span>' : ""}
+          </label>
+          ${renderField(field, value)}
+        </div>
+      `;
+    }
+    const headerHtml = `
+      <div class="properties-header">
+        <h3 class="properties-title">${cardDef.label}</h3>
+        <button class="sheet-close" id="close-properties">\u2715</button>
+      </div>
+    `;
+    return headerHtml + `<div class="properties-content">${fieldsHtml}</div>`;
+  }
+  function renderField(field, value) {
+    switch (field.type) {
+      case "bool":
+        return `
+          <label class="switch">
+            <input type="checkbox" data-field="${field.name}" ${value ? "checked" : ""}>
+            <span class="switch-slider"></span>
+          </label>
+        `;
+      case "enum":
+        return `
+          <select data-field="${field.name}" class="node-field-select">
+            ${field.options.map((opt) => `<option value="${opt}" ${opt === value ? "selected" : ""}>${capitalize(opt)}</option>`).join("")}
+          </select>
+        `;
+      case "number":
+        return `<input type="number" data-field="${field.name}" min="${field.min || 0}" max="${field.max || ""}" value="${value}" class="node-field-input">`;
+      case "text":
+      case "string":
+      case "ident":
+      case "url":
+        return `<input type="text" data-field="${field.name}" value="${escapeHtml(String(value))}" placeholder="${escapeHtml(field.label)}" class="node-field-input">`;
+      case "strlist":
+        return `<input type="text" data-field="${field.name}" value="${escapeHtml(String(Array.isArray(value) ? value.join(", ") : value))}" placeholder="\u06A9\u0627\u0645\u0627 \u062C\u062F\u0627 \u0634\u062F\u0647" class="node-field-input">`;
+      default:
+        return `<input type="text" data-field="${field.name}" value="${escapeHtml(String(value))}" class="node-field-input">`;
+    }
+  }
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+  function capitalize(s) {
+    const translations = {
+      exact: "\u062F\u0642\u06CC\u0642",
+      contains: "\u0634\u0627\u0645\u0644 \u0634\u0648\u0646\u062F\u0647",
+      regex: "\u0627\u0644\u06AF\u0648",
+      default: "\u067E\u06CC\u0634\u200C\u0641\u0631\u0636",
+      glass: "\u0634\u06CC\u0634\u0647\u200C\u0627\u06CC",
+      persistent: "\u062F\u0627\u0626\u0645\u06CC",
+      popup: "\u0634\u0646\u0627\u0648\u0631",
+      inline: "\u0627\u06CC\u0646\u0644\u0627\u06CC\u0646",
+      reply: "\u0632\u06CC\u0631 \u0635\u0641\u062D\u0647 \u0686\u062A",
+      new: "\u062C\u062F\u06CC\u062F",
+      edit: "\u0648\u06CC\u0631\u0627\u06CC\u0634",
+      HTML: "HTML",
+      Markdown: "Markdown",
+      none: "\u0628\u062F\u0648\u0646 \u0642\u0627\u0644\u0628",
+      GET: "\u062F\u0631\u06CC\u0627\u0641\u062A",
+      POST: "\u0627\u0631\u0633\u0627\u0644",
+      url: "\u0622\u062F\u0631\u0633",
+      webapp: "\u0645\u06CC\u0646\u06CC\u0648\u0628\u200C\u0627\u067E",
+      share: "\u0627\u0634\u062A\u0631\u0627\u06A9",
+      single: "\u062A\u06A9\u200C\u06A9\u0627\u0631\u0628\u0631\u0647",
+      group: "\u06AF\u0631\u0648\u0647\u06CC",
+      low: "\u067E\u0627\u06CC\u06CC\u0646",
+      normal: "\u0645\u0639\u0645\u0648\u0644\u06CC",
+      high: "\u0628\u0627\u0644\u0627"
+    };
+    return translations[s] || s;
+  }
+  function renderCanvas() {
+    const nodesContainer = container?.querySelector("#canvas-nodes");
+    if (!nodesContainer) return;
+    nodesContainer.innerHTML = "";
+    for (const node of nodes) {
+      const el = document.createElement("div");
+      el.className = "canvas-node";
+      if (node.id === selectedNode?.id) el.classList.add("selected");
+      el.style.left = `${node.x}px`;
+      el.style.top = `${node.y}px`;
+      el.dataset.nodeId = node.id;
+      el.dataset.nodeKind = node.kind;
+      const cardDef = registry.cards[node.kind];
+      const ports = cardDef ? cardDef.ports || [{ id: "run", label: "run" }] : [{ id: "run", label: "run" }];
+      el.innerHTML = `
+        <div class="node-header" draggable="true">
+          <span class="node-type-badge ${cardDef?.cat || "msg"}">${getCardIcon(node.kind)}</span>
+          <div class="node-id">${escapeHtml(String(node.kind))}: ${escapeHtml(String(node.id))}</div>
+          <button class="node-delete" data-node-id="${node.id}" aria-label="\u062D\u0630\u0641">\u2715</button>
+        </div>
+        <div class="node-body">
+          <div class="node-ports">
+            ${ports.map((p) => `
+              <div class="node-port">
+                <span class="text-muted">${escapeHtml(p.label || p.id)}</span>
+                <div class="port-connections" data-node-id="${node.id}" data-port="${p.id}">
+                  ${getConnectedEdges(node.id, p.id).map((e) => `<span class="port-connection">\u{1F517}</span>`).join("")}
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+      nodesContainer.appendChild(el);
+    }
+  }
+  function getConnectedEdges(nodeId, portId) {
+    return edges.filter(
+      (e) => e.from === nodeId && e.from_port === portId || e.to === nodeId && e.to_port === portId
+    );
+  }
+  function renderEdges() {
+    const svg = container?.querySelector("#canvas-edges");
+    if (!svg) return;
+    svg.innerHTML = `
+      <defs>
+        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 8 3.5, 0 7" fill="var(--color-border-strong)" />
+        </marker>
+      </defs>
+    `;
+    if (edgeCreating) {
+      const fromNode = nodes.find((n) => n.id === edgeCreating.nodeId);
+      if (fromNode) {
+        const fromEl = container?.querySelector(`[data-node-id="${edgeCreating.nodeId}"]`);
+        if (fromEl) {
+          const fromRect = fromEl.getBoundingClientRect();
+          const canvasRect = container?.querySelector(".canvas-nodes").getBoundingClientRect();
+          if (canvasRect) {
+            const x1 = fromRect.right - canvasRect.left;
+            const y1 = fromRect.top + fromRect.height / 2 - canvasRect.top;
+            const x2 = x1 + 100;
+            const y2 = y1;
+            const dashPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            dashPath.className = "edge-path creating";
+            dashPath.setAttribute("d", `M ${x1} ${y1} L ${x2} ${y2}`);
+            dashPath.style.strokeDasharray = "5,5";
+            svg.appendChild(dashPath);
+          }
+        }
+      }
+    }
+    for (const edge of edges) {
+      const sourceNode = nodes.find((n) => n.id === edge.from);
+      const targetNode = nodes.find((n) => n.id === edge.to);
+      if (!sourceNode || !targetNode) continue;
+      const sourceEl = container?.querySelector(`[data-node-id="${edge.from}"]`);
+      const targetEl = container?.querySelector(`[data-node-id="${edge.to}"]`);
+      if (!sourceEl || !targetEl) continue;
+      const sourceRect = sourceEl.getBoundingClientRect();
+      const targetRect = targetEl.getBoundingClientRect();
+      const canvasRect = container?.querySelector(".canvas-nodes").getBoundingClientRect();
+      if (!canvasRect) continue;
+      const x1 = sourceRect.right - canvasRect.left;
+      const y1 = sourceRect.top + sourceRect.height / 2 - canvasRect.top;
+      const x2 = targetRect.left - canvasRect.left;
+      const y2 = targetRect.top + targetRect.height / 2 - canvasRect.top;
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.className = "edge-path" + (edge === selectedEdge ? " selected" : "");
+      path.setAttribute("d", `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`);
+      path.style.cursor = "pointer";
+      path.addEventListener("click", (e) => {
+        e.stopPropagation();
+        selectedEdge = edge;
+        selectedNode = null;
+        render();
+      });
+      svg.appendChild(path);
+    }
+    renderMinimap();
+  }
+  function validateFlow() {
+    const errors = [];
+    if (nodes.length === 0) {
+      errors.push("\u06AF\u0631\u0627\u0641 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A \u2014 \u06A9\u0627\u0631\u062A\u06CC \u0627\u0636\u0627\u0641\u0647 \u06A9\u0646\u06CC\u062F");
+      return errors;
+    }
+    const cmdNodes = nodes.filter((n) => n.kind === "cmd");
+    if (cmdNodes.length > 0) {
+      const names = /* @__PURE__ */ new Set();
+      cmdNodes.forEach((n) => {
+        const name = n.name || n.command;
+        if (!name) {
+          errors.push(`\u06A9\u0627\u0631\u062A \u062F\u0633\u062A\u0648\u0631 "${n.id}" \u0646\u0627\u0645 \u0646\u062F\u0627\u0631\u062F`);
+        } else if (names.has(name)) {
+          errors.push(`\u0646\u0627\u0645 \u062F\u0633\u062A\u0648\u0631 \u062A\u06A9\u0631\u0627\u0631\u06CC: "${escapeHtml(name)}"`);
+        } else {
+          names.add(name);
+        }
+      });
+    }
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    edges.forEach((e, i) => {
+      if (!nodeIds.has(e.from)) errors.push(`\u06CC\u0627\u0644 ${i + 1}: \u0645\u0628\u062F\u0623 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F (${e.from})`);
+      if (!nodeIds.has(e.to)) errors.push(`\u06CC\u0627\u0644 ${i + 1}: \u0645\u0642\u0635\u062F \u06CC\u0627\u0641\u062A \u0646\u0634\u062F (${e.to})`);
+    });
+    if (nodes.length > 200) errors.push(`\u062A\u0639\u062F\u0627\u062F \u0646\u0648\u062F\u0647\u0627 \u0628\u06CC\u0634 \u0627\u0632 \u062D\u062F \u0645\u062C\u0627\u0632 (${nodes.length} > 200)`);
+    if (edges.length > 500) errors.push(`\u062A\u0639\u062F\u0627\u062F \u06CC\u0627\u0644\u200C\u0647\u0627 \u0628\u06CC\u0634 \u0627\u0632 \u062D\u062F \u0645\u062C\u0627\u0632 (${edges.length} > 500)`);
+    return errors;
+  }
+  function renderMinimap() {
+    const minimap = container?.querySelector("#canvas-minimap");
+    const viewport = container?.querySelector("#minimap-viewport");
+    if (!minimap || !viewport || !registry) return;
+    let dots = "";
+    const nodeRadius = 2;
+    const edgeColor = getComputedStyle(document.documentElement).getPropertyValue("--color-border-strong");
+    if (nodes.length === 0) {
+      minimap.innerHTML = '<div style="padding:4px;font-size:10px;color:var(--color-text-muted)">\u062E\u0627\u0644\u06CC</div>';
+      return;
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    nodes.forEach((n) => {
+      minX = Math.min(minX, n.x);
+      minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x);
+      maxY = Math.max(maxY, n.y);
+    });
+    const margin = 20;
+    minX -= margin;
+    minY -= margin;
+    maxX += margin;
+    maxY += margin;
+    const width = Math.max(maxX - minX, 1);
+    const height = Math.max(maxY - minY, 1);
+    const scale2 = Math.min(130 / width, 80 / height);
+    const offsetX = -minX * scale2;
+    const offsetY = -minY * scale2;
+    let svgContent = `<svg width="150" height="100" style="width:100%;height:100%">`;
+    svgContent += `<rect width="150" height="100" fill="var(--color-bg)" />`;
+    edges.forEach((e) => {
+      const fromNode = nodes.find((n) => n.id === e.from);
+      const toNode = nodes.find((n) => n.id === e.to);
+      if (!fromNode || !toNode) return;
+      const x1 = fromNode.x * scale2 + offsetX + 10;
+      const y1 = fromNode.y * scale2 + offsetY + 10;
+      const x2 = toNode.x * scale2 + offsetX + 10;
+      const y2 = toNode.y * scale2 + offsetY + 10;
+      svgContent += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${edgeColor}" stroke-width="1" />`;
+    });
+    nodes.forEach((n) => {
+      const cx = n.x * scale2 + offsetX + 10;
+      const cy = n.y * scale2 + offsetY + 10;
+      const color = n.kind === "cmd" ? "#22c56e" : n.kind === "condition" ? "#f59e0b" : "#6b7280";
+      svgContent += `<circle cx="${cx}" cy="${cy}" r="${nodeRadius}" fill="${color}" />`;
+    });
+    svgContent += "</svg>";
+    minimap.innerHTML = svgContent;
+    const viewportRect = minimap.querySelector("svg")?.getBoundingClientRect();
+    if (viewportRect) {
+      viewport.style.width = `${viewportRect.width}px`;
+      viewport.style.height = `${viewportRect.height}px`;
+    }
+  }
+  async function loadFlow() {
+    try {
+      const flow2 = await api_default.get(`/api/bots/${botId}/flow`);
+      nodes = flow2.nodes || [];
+      edges = flow2.edges || [];
+      for (const node of nodes) {
+        if (typeof node.x === "undefined") node.x = 100;
+        if (typeof node.y === "undefined") node.y = 100;
+      }
+    } catch (e) {
+      if (e.status === 404) {
+        nodes = [];
+        edges = [];
+      } else {
+        toast_default.error("\u062E\u0637\u0627 \u062F\u0631 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u06AF\u0631\u0627\u0641: " + e.message);
+      }
+    }
+  }
+  function attachEvents() {
+    const backBtn = container?.querySelector("#back-btn");
+    backBtn?.addEventListener("click", () => router_default.navigate("/bots"));
+    const saveBtn = container?.querySelector("#save-btn");
+    saveBtn?.addEventListener("click", saveFlow);
+    const aiStatus = container?.querySelector("#ai-status");
+    if (aiStatus && botId) {
+      loadAiConfig(aiStatus);
+    }
+    const addBtn = container?.querySelector("#add-node-btn");
+    addBtn?.addEventListener("click", showAddNodeSheet);
+    const paletteItems = container?.querySelectorAll(".palette-item");
+    paletteItems.forEach((item) => {
+      item.addEventListener("dragstart", (e) => {
+        e.dataTransfer.setData("application/json", JSON.stringify({
+          kind: item.dataset.cardKind
+        }));
+        item.classList.add("dragging");
+      });
+      item.addEventListener("dragend", () => item.classList.remove("dragging"));
+    });
+    const paletteSearch = container?.querySelector("#palette-search");
+    paletteSearch?.addEventListener("input", (e) => {
+      const filter = e.target.value;
+      const html = renderPalette(filter);
+      const tab = container?.querySelector("#palette-tab");
+      if (tab) {
+        tab.innerHTML = html;
+        const items = tab.querySelectorAll(".palette-item");
+        items.forEach((item) => {
+          item.addEventListener("dragstart", (ev) => {
+            ev.dataTransfer.setData("application/json", JSON.stringify({
+              kind: item.dataset.cardKind
+            }));
+            item.classList.add("dragging");
+          });
+          item.addEventListener("dragend", () => item.classList.remove("dragging"));
+        });
+      }
+    });
+    const canvasWrapper = container?.querySelector("#canvas-wrapper");
+    if (canvasWrapper) {
+      canvasWrapper.addEventListener("dragover", (e) => e.preventDefault());
+      canvasWrapper.addEventListener("drop", (e) => {
+        e.preventDefault();
+        const data = JSON.parse(e.dataTransfer.getData("application/json"));
+        const rect = canvasWrapper.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        addNode(data.kind, x, y);
+      });
+      canvasWrapper.addEventListener("mousedown", startPan);
+      canvasWrapper.addEventListener("mousemove", doPan);
+      canvasWrapper.addEventListener("mouseup", endPan);
+      canvasWrapper.addEventListener("click", (e) => {
+        if (e.target === canvasWrapper) {
+          selectedNode = null;
+          selectedEdge = null;
+          edgeCreating = null;
+          render();
+        }
+      });
+    }
+    const tabButtons = container?.querySelectorAll(".sidebar-tab");
+    tabButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tab = btn.dataset.tab;
+        container?.querySelectorAll(".sidebar-tab").forEach((b) => b.classList.remove("active"));
+        container?.querySelectorAll(".tab-content").forEach((c) => c.style.display = "none");
+        btn.classList.add("active");
+        container?.querySelector(`#${tab}-tab`)?.style?.setProperty("display", "block");
+      });
+    });
+    const closeProps = container?.querySelector("#close-properties");
+    closeProps?.addEventListener("click", () => {
+      selectedNode = null;
+      selectedEdge = null;
+      edgeCreating = null;
+      render();
+    });
+    const nodeHeaders = container?.querySelectorAll(".node-header");
+    nodeHeaders.forEach((header) => {
+      header.addEventListener("mousedown", startNodeDrag);
+    });
+    const deleteBtns = container?.querySelectorAll(".node-delete");
+    deleteBtns.forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        deleteNode(btn.dataset.nodeId);
+      });
+    });
+    const nodeClickHandlers = container?.querySelectorAll(".canvas-node");
+    nodeClickHandlers.forEach((nodeEl) => {
+      nodeEl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (edgeCreating) return;
+        const nodeId = nodeEl.dataset.nodeId;
+        selectedNode = nodes.find((n) => n.id === nodeId) || null;
+        selectedEdge = null;
+        render();
+      });
+    });
+    const fieldInputs = container?.querySelectorAll("[data-field]");
+    fieldInputs.forEach((input) => {
+      input.addEventListener("change", () => {
+        const fieldName = input.dataset.field;
+        if (!fieldName || !selectedNode) return;
+        if (input.type === "checkbox") {
+          selectedNode[fieldName] = input.checked;
+        } else if (input.type === "number") {
+          selectedNode[fieldName] = parseFloat(input.value) || 0;
+        } else {
+          selectedNode[fieldName] = input.value;
+        }
+        render();
+      });
+    });
+    const portElements = container?.querySelectorAll(".port-connections");
+    portElements.forEach((port) => {
+      port.addEventListener("click", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        handlePortClick(port.dataset.nodeId, port.dataset.port);
+      });
+    });
+    if (selectedEdge) {
+      const deleteEdgeBtn = container?.querySelector("#delete-edge-btn");
+      deleteEdgeBtn?.addEventListener("click", deleteSelectedEdge);
+    }
+    const cancelEdgeBtn = container?.querySelector("#cancel-edge-btn");
+    cancelEdgeBtn?.addEventListener("click", () => {
+      edgeCreating = null;
+      render();
+    });
+    document.addEventListener("keydown", handleKeydown);
+    const zoomIn = container?.querySelector("#zoom-in");
+    const zoomOut = container?.querySelector("#zoom-out");
+    const zoomReset = container?.querySelector("#zoom-reset");
+    zoomIn?.addEventListener("click", () => {
+      scale = Math.min(scale * 0.9, 2);
+      updateScale();
+    });
+    zoomOut?.addEventListener("click", () => {
+      scale = Math.max(scale * 1.1, 0.3);
+      updateScale();
+    });
+    zoomReset?.addEventListener("click", () => {
+      scale = 1;
+      updateScale();
+    });
+    const dupBtn = container?.querySelector("#duplicate-btn");
+    dupBtn?.addEventListener("click", () => {
+      if (!selectedNode) return;
+      duplicateNode(selectedNode);
+    });
+    document.removeEventListener("keydown", handleKeydown);
+    document.addEventListener("keydown", handleKeydown);
+  }
+  function handlePortClick(nodeId, portId) {
+    if (edgeCreating) {
+      if (edgeCreating.nodeId === nodeId) {
+        edgeCreating = null;
+        render();
+        return;
+      }
+      addEdge(edgeCreating.nodeId, edgeCreating.portId, nodeId, portId);
+      edgeCreating = null;
+      render();
+    } else {
+      edgeCreating = { nodeId, portId };
+      render();
+    }
+  }
+  function addEdge(fromNodeId, fromPort, toNodeId, toPort) {
+    if (fromNodeId === toNodeId) return;
+    const exists = edges.some(
+      (e) => e.from === fromNodeId && e.to === toNodeId && (e.from_port || "run") === (fromPort || "run") && (e.to_port || "run") === (toPort || "run")
+    );
+    if (exists) return;
+    edges.push({
+      from: fromNodeId,
+      to: toNodeId,
+      from_port: fromPort || "run",
+      to_port: toPort || "run"
+    });
+  }
+  function deleteSelectedEdge() {
+    if (!selectedEdge) return;
+    edges = edges.filter((e) => e !== selectedEdge);
+    selectedEdge = null;
+    render();
+  }
+  function duplicateNode(node) {
+    const newNodeId = `n${Date.now()}`;
+    const newNode = { ...node, id: newNodeId, x: node.x + 30, y: node.y + 30 };
+    nodes.push(newNode);
+    selectedNode = newNode;
+    selectedEdge = null;
+    edgeCreating = null;
+    render();
+  }
+  function handleKeydown(e) {
+    if (!container) return;
+    if (e.key === "Escape") {
+      if (edgeCreating) {
+        edgeCreating = null;
+        render();
+        return;
+      }
+      if (selectedNode) {
+        selectedNode = null;
+      }
+      if (selectedEdge) {
+        selectedEdge = null;
+      }
+      render();
+    }
+    if (e.key === "Delete") {
+      if (selectedEdge) {
+        edges = edges.filter((e2) => e2 !== selectedEdge);
+        selectedEdge = null;
+        render();
+        return;
+      }
+      if (selectedNode) {
+        deleteNode(selectedNode.id);
+      }
+    }
+    if (e.key === "d" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if (selectedNode) {
+        duplicateNode(selectedNode);
+      }
+    }
+  }
+  function startPan(e) {
+    if (e.target.closest(".canvas-node")) return;
+    isPanning = true;
+    panStart = { x: e.clientX, y: e.clientY };
+  }
+  function doPan(e) {
+    if (!isPanning) return;
+    const dx = e.clientX - panStart.x;
+    const dy = e.clientY - panStart.y;
+    const nodesContainer = container?.querySelector(".canvas-nodes");
+    if (nodesContainer) {
+      const transform = nodesContainer.style.transform || "";
+      nodesContainer.style.transform = `translate(${dx}px, ${dy}px)${transform.includes("scale") ? "" : ""}`;
+    }
+  }
+  function endPan() {
+    isPanning = false;
+  }
+  function updateScale() {
+    const nodesContainer = container?.querySelector(".canvas-nodes");
+    if (nodesContainer) {
+      const transform = nodesContainer.style.transform || "";
+      const match = transform.match(/translate\(([^,]+),\s*([^)]+)\)/);
+      let tx = 0, ty = 0;
+      if (match) {
+        tx = parseFloat(match[1]);
+        ty = parseFloat(match[2]);
+      }
+      nodesContainer.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    }
+  }
+  function startNodeDrag(e) {
+    e.stopPropagation();
+    const nodeEl = e.target.closest(".canvas-node");
+    const nodeId = nodeEl?.dataset?.nodeId;
+    if (!nodeId) return;
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    nodeEl.classList.add("dragging");
+    const offsetX = e.clientX - nodeEl.getBoundingClientRect().left;
+    const offsetY = e.clientY - nodeEl.getBoundingClientRect().top;
+    const onMouseMove = (ev) => {
+      ev.preventDefault();
+      node.x = ev.clientX - nodeEl.getBoundingClientRect().left - offsetX + node.x;
+      node.y = ev.clientY - nodeEl.getBoundingClientRect().top - offsetY + node.y;
+    };
+    const onMouseUp = () => {
+      nodeEl.classList.remove("dragging");
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }
+  function addNode(kind, x, y) {
+    const nodeId = `n${Date.now()}`;
+    const newNode = {
+      id: nodeId,
+      kind,
+      x,
+      y,
+      ...registry.cards[kind].fields.reduce((acc, f) => {
+        acc[f.name] = f.default ?? (f.type === "bool" ? false : "");
+        return acc;
+      }, {})
+    };
+    nodes.push(newNode);
+    selectedNode = newNode;
+    render();
+  }
+  function deleteNode(nodeId) {
+    nodes = nodes.filter((n) => n.id !== nodeId);
+    edges = edges.filter((e) => e.from !== nodeId && e.to !== nodeId);
+    if (selectedNode?.id === nodeId) selectedNode = null;
+    if (selectedEdge?.from === nodeId || selectedEdge?.to === nodeId) selectedEdge = null;
+    render();
+  }
+  function showAddNodeSheet() {
+    let html = '<div class="card-palette">';
+    for (const [kind, card] of Object.entries(registry.cards)) {
+      if (card.cat === "int") continue;
+      html += `
+        <div class="palette-item" data-card-kind="${kind}" style="cursor: pointer;">
+          <span class="palette-item-icon">${getCardIcon(kind)}</span>
+          <span class="palette-item-label">${escapeHtml(card.label)}</span>
+        </div>
+      `;
+    }
+    html += "</div>";
+    const sheet = sheet_default.open(html, { title: "\u0627\u0641\u0632\u0648\u062F\u0646 \u06A9\u0627\u0631\u062A" });
+    if (sheet) {
+      const items = sheet.el.querySelectorAll("[data-card-kind]");
+      items.forEach((item) => {
+        item.addEventListener("click", () => {
+          addNode(item.dataset.cardKind, 200, 200);
+          sheet_default.close();
+        });
+      });
+    }
+  }
+  async function loadAiConfig(aiStatusEl) {
+    if (!botId) return;
+    try {
+      const cfg = await api_default.get(`/api/bots/${botId}/ai-config`);
+      const hasKey = cfg.has_api_key;
+      const keyDisplay = hasKey ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 \u0645\u062A\u0635\u0644 \u2705" : "\u{1F513} \u0648\u0635\u0644 \u0646\u0634\u062F\u0647";
+      aiStatusEl.innerHTML = `
+        <div class="ai-config-summary">
+          <div class="ai-key-status ${hasKey ? "configured" : "not-configured"}">${keyDisplay}</div>
+          <div class="ai-model">${escapeHtml(cfg.model || "")}</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="edit-ai-btn" style="margin-top: var(--spacing-2);">\u270F\uFE0F \u0648\u06CC\u0631\u0627\u06CC\u0634</button>
+      `;
+      const editBtn = aiStatusEl.querySelector("#edit-ai-btn");
+      editBtn?.addEventListener("click", () => showAiConfigSheet(cfg));
+    } catch (e) {
+      aiStatusEl.innerHTML = '<span class="text-muted">\u062E\u0637\u0627 \u062F\u0631 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC</span>';
+    }
+  }
+  function showAiConfigSheet(currentCfg) {
+    const form = document.createElement("form");
+    form.innerHTML = `
+      <div class="input-group">
+        <label>\u06A9\u0644\u06CC\u062F API</label>
+        <input type="password" name="api_key" placeholder="sk-..." autocomplete="off" ${currentCfg.has_api_key ? 'value="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"' : ""}>
+        <div class="input-hint">\u06A9\u0644\u06CC\u062F OpenAI \u06CC\u0627 \u0633\u0631\u0648\u06CC\u0633 \u0633\u0627\u0632\u06AF\u0627\u0631 (\u062F\u0631 \u0635\u0648\u0631\u062A \u0648\u0627\u0631\u062F \u06A9\u0631\u062F\u0646\u060C \u062C\u0627\u06CC\u06AF\u0632\u06CC\u0646 \u0645\u06CC\u200C\u0634\u0648\u062F)</div>
+      </div>
+      <div class="input-group">
+        <label>\u0622\u062F\u0631\u0633 \u0633\u0631\u0648\u0631</label>
+        <input type="url" name="base_url" placeholder="https://api.openai.com/v1" value="${escapeHtml(currentCfg.base_url || "")}">
+      </div>
+      <div class="input-group">
+        <label>\u0645\u062F\u0644</label>
+        <input type="text" name="model" placeholder="gpt-4o-mini" value="${escapeHtml(currentCfg.model || "")}">
+      </div>
+    `;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const payload = {};
+      if (form.api_key.value.trim() && !form.api_key.value.includes("\u2022")) {
+        payload.api_key = form.api_key.value.trim();
+      }
+      if (form.base_url.value.trim()) {
+        payload.base_url = form.base_url.value.trim();
+      }
+      if (form.model.value.trim()) {
+        payload.model = form.model.value.trim();
+      }
+      if (!Object.keys(payload).length) {
+        toast_default.error("\u0647\u06CC\u0686 \u062A\u063A\u06CC\u06CC\u0631\u06CC \u0646\u06CC\u0633\u062A");
+        return;
+      }
+      const submitBtn = sheet_default.el?.querySelector('.sheet-footer button[type="submit"]');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = "\u062F\u0631 \u062D\u0627\u0644 \u0630\u062E\u06CC\u0631\u0647...";
+      }
+      try {
+        await api_default.patch(`/api/bots/${botId}/ai-config`, payload);
+        toast_default.success("\u062A\u0646\u0638\u06CC\u0645\u0627\u062A AI \u0630\u062E\u06CC\u0631\u0647 \u0634\u062F");
+        sheet_default.close();
+        const aiStatus = container?.querySelector("#ai-status");
+        if (aiStatus) loadAiConfig(aiStatus);
+      } catch (err) {
+        toast_default.error("\u062E\u0637\u0627: " + err.message);
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "\u0630\u062E\u06CC\u0631\u0647";
+        }
+      }
+    });
+    sheet_default.open(form, {
+      title: "\u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0647\u0648\u0634 \u0645\u0635\u0646\u0648\u0639\u06CC",
+      footer: `
+        <button type="button" class="btn btn-secondary" onclick="this.closest('.sheet-root').querySelector('.sheet-close').click()">\u0627\u0646\u0635\u0631\u0627\u0641</button>
+        <button type="submit" form="${form.id || ""}" class="btn btn-primary">\u0630\u062E\u06CC\u0631\u0647</button>
+      `
+    });
+    form.querySelector('input[name="api_key"]').focus();
+  }
+  async function saveFlow() {
+    if (!registry || !botId) return;
+    validationErrors = validateFlow();
+    const graph = {
+      nodes: nodes.map((n) => {
+        const { x, y, ...rest } = n;
+        return rest;
+      }),
+      edges: edges.map((e) => {
+        const out = { from: e.from, to: e.to };
+        if (e.from_port) out.from_port = e.from_port;
+        if (e.to_port) out.to_port = e.to_port;
+        return out;
+      })
+    };
+    try {
+      await api_default.put(`/api/bots/${botId}/flow`, graph);
+      validationErrors = [];
+      toast_default.success("\u06AF\u0631\u0627\u0641 \u0628\u0627 \u0645\u0648\u0641\u0642\u06CC\u062A \u0630\u062E\u06CC\u0631\u0647 \u0634\u062F");
+      render();
+    } catch (e) {
+      validationErrors = [e.message || "\u062E\u0637\u0627 \u062F\u0631 \u0630\u062E\u06CC\u0631\u0647 \u06AF\u0631\u0627\u0641"];
+      toast_default.error("\u062E\u0637\u0627 \u062F\u0631 \u0630\u062E\u06CC\u0631\u0647: " + e.message);
+      render();
+    }
+  }
+  async function init2(el, id) {
+    container = el;
+    botId = id;
+    await loadFlow();
+    registry = await api_default.get("/api/flow/registry").catch((e) => {
+      toast_default.error("\u062E\u0637\u0627 \u062F\u0631 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u0631\u062C\u06CC\u0633\u062A\u0631\u06CC: " + e.message);
+      return null;
+    });
+    render();
+  }
+  return { init: init2, loadFlow };
+})();
+var studio_default = STUDIO_VIEW;
+
+// src/views/profile.js
+var PROFILE_VIEW = /* @__PURE__ */ (() => {
+  let user = null;
+  let loading = false;
+  let container = null;
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+  async function loadUser() {
+    if (loading) return;
+    if (!auth_default.isAuthenticated()) {
+      user = null;
+      render();
+      return;
+    }
+    loading = true;
+    render();
+    try {
+      user = await api_default.get("/api/auth/me");
+    } catch (e) {
+      toast_default.error("\u062E\u0637\u0627 \u062F\u0631 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u067E\u0631\u0648\u0641\u0627\u06CC\u0644: " + e.message);
+      user = null;
+    } finally {
+      loading = false;
+      render();
+    }
+  }
+  function render() {
+    if (!container) return;
+    let html = `
+      <div class="page-header">
+        <h1 class="page-title">\u067E\u0631\u0648\u0641\u0627\u06CC\u0644 \u0645\u0646</h1>
+      </div>
+    `;
+    if (loading) {
+      html += `<div class="loading-state"><div class="spinner"></div>\u062F\u0631 \u062D\u0627\u0644 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC...</div>`;
+      container.innerHTML = html;
+      return;
+    }
+    if (!user) {
+      html += renderLoginCard();
+      container.innerHTML = html;
+      attachLoginEvents();
+      return;
+    }
+    const avatarUrl = user.photo_url ? user.photo_url : `https://ui-avatars.com/api/?background=0d6efd&color=fff&name=${encodeURIComponent(user.first_name || user.username || "U")}`;
+    const coins = user.coins || 0;
+    const referrals = user.referrals || user.referral_count || 0;
+    const referralCode = user.referral_code || "\u0646\u062F\u0627\u0631\u06CC\u062F";
+    html += `
+      <div class="card">
+        <div class="card-header">
+          <div class="flex items-center gap-3">
+            <img src="${avatarUrl}" alt="avatar" class="avatar lg">
+            <div>
+              <div class="card-title">${escapeHtml(user.first_name || "")} ${escapeHtml(user.last_name || "")}</div>
+              <div class="text-sm text-muted">@${escapeHtml(user.username || "unknown")}</div>
+            </div>
+          </div>
+          <span class="badge badge-primary">\u{1FA99} ${coins.toLocaleString()} \u0633\u06A9\u0647</span>
+        </div>
+        <div class="input-group">
+          <label>\u0622\u06CC\u200C\u062F\u06CC \u0639\u062F\u062F\u06CC</label>
+          <input type="text" value="${user.uid}" disabled>
+        </div>
+        <div class="input-group">
+          <label>\u06A9\u062F \u0631\u0641\u0631\u0627\u0644</label>
+          <input type="text" value="${escapeHtml(referralCode)}" disabled>
+          <div class="input-hint">\u062A\u0639\u062F\u0627\u062F \u0627\u0631\u062C\u0627\u0639\u200C\u0647\u0627: ${referrals.toLocaleString()}</div>
+        </div>
+        <div class="input-group">
+          <label>\u062A\u0627\u0631\u06CC\u062E \u0639\u0636\u0648\u06CC\u062A</label>
+          <input type="text" value="${new Date(user.created_at || Date.now()).toLocaleDateString("fa-IR")}" disabled>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">\u062A\u0646\u0638\u06CC\u0645\u0627\u062A</div>
+        </div>
+        <div class="input-group">
+          <label class="flex items-center justify-between">
+            <span>\u0627\u0639\u0644\u0627\u0646\u200C\u0647\u0627</span>
+            <label class="switch">
+              <input type="checkbox" id="notify-toggle" ${user.settings?.notify ? "checked" : ""}>
+              <span class="switch-slider"></span>
+            </label>
+          </label>
+        </div>
+        <div class="input-group">
+          <label class="flex items-center justify-between">
+            <span>\u0648\u0631\u0648\u062F \u0628\u0627 \u0631\u0645\u0632 \u0639\u0628\u0648\u0631</label>
+            <span class="text-sm text-muted">${user.has_password ? "\u0641\u0639\u0627\u0644" : "\u063A\u06CC\u0631\u0641\u0639\u0627\u0644"}</span>
+          </label>
+        </div>
+        <div class="flex gap-2">
+          <button class="btn btn-secondary flex-1" id="logout-btn">\u{1F6AA} \u062E\u0631\u0648\u062C</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">\u0631\u0627\u0647\u0646\u0645\u0627\u06CC \u0631\u0641\u0631\u0627\u0644</div>
+        </div>
+        <div class="text-sm text-muted mb-2">
+          \u06A9\u062F \u0631\u0641\u0631\u0627\u0644 \u0634\u0645\u0627: <strong>${escapeHtml(referralCode)}</strong>
+        </div>
+        <div class="text-sm text-muted">
+          \u0628\u0631\u0627\u06CC \u0647\u0631 \u06A9\u0627\u0631\u0628\u0631\u06CC \u06A9\u0647 \u0628\u0627 \u06A9\u062F \u0634\u0645\u0627 \u062B\u0628\u062A \u0646\u0627\u0645 \u06A9\u0646\u062F\u060C ${50} \u0633\u06A9\u0647 \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u0627\u0647\u06CC\u062F \u06A9\u0631\u062F.
+        </div>
+      </div>
+    `;
+    container.innerHTML = html;
+    attachEvents();
+  }
+  function renderLoginCard() {
+    return `
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">\u0648\u0631\u0648\u062F \u0628\u0647 \u062D\u0633\u0627\u0628</div>
+        </div>
+        <div class="flex flex-col gap-2">
+          <button class="btn btn-primary btn-block" id="login-tg-btn">\u0648\u0631\u0648\u062F \u0628\u0627 \u062A\u0644\u06AF\u0631\u0627\u0645</button>
+          <button class="btn btn-secondary btn-block" id="login-cred-btn">\u0648\u0631\u0648\u062F \u0628\u0627 \u0646\u0627\u0645 \u06A9\u0627\u0631\u0628\u0631\u06CC</button>
+          <button class="btn btn-secondary btn-block" id="register-btn">\u062B\u0628\u062A\u200C\u0646\u0627\u0645 \u062D\u0633\u0627\u0628 \u0648\u0628</button>
+        </div>
+      </div>
+    `;
+  }
+  function attachLoginEvents() {
+    const tgBtn = container?.querySelector("#login-tg-btn");
+    tgBtn?.addEventListener("click", () => {
+      if (window.Telegram?.WebApp?.initData) {
+        auth_default.loginWithInitData(window.Telegram.WebApp.initData).then(() => {
+          loadUser();
+        }).catch((e) => {
+          toast_default.error("\u0648\u0631\u0648\u062F \u0646\u0627\u0645\u0648\u0641\u0642: " + e.message);
+        });
+      } else {
+        toast_default.info("\u0648\u0631\u0648\u062F \u0627\u0632 \u0637\u0631\u06CC\u0642 \u062A\u0644\u06AF\u0631\u0627\u0645 WebApp \u062F\u0631 \u062F\u0633\u062A\u0631\u0633 \u0646\u06CC\u0633\u062A");
+      }
+    });
+    const credBtn = container?.querySelector("#login-cred-btn");
+    credBtn?.addEventListener("click", () => showLoginForm());
+    const regBtn = container?.querySelector("#register-btn");
+    regBtn?.addEventListener("click", () => showRegisterFlow());
+  }
+  function showLoginForm() {
+    const form = document.createElement("form");
+    form.innerHTML = `
+      <div class="input-group">
+        <label>\u0646\u0627\u0645 \u06A9\u0627\u0631\u0628\u0631\u06CC</label>
+        <input type="text" name="username" placeholder="\u0646\u0627\u0645 \u06A9\u0627\u0631\u0628\u0631\u06CC \u0648\u0628" required autocomplete="off">
+      </div>
+      <div class="input-group">
+        <label>\u0631\u0645\u0632 \u0639\u0628\u0648\u0631</label>
+        <input type="password" name="password" placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" required>
+      </div>
+    `;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const username = form.username.value.trim();
+      const password = form.password.value;
+      if (!username || !password) return;
+      const submitBtn = sheet_default.el?.querySelector('.sheet-footer button[type="submit"]');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = "\u062F\u0631 \u062D\u0627\u0644 \u0648\u0631\u0648\u062F...";
+      }
+      try {
+        await auth_default.loginWithCredentials(username, password);
+        toast_default.success("\u0648\u0631\u0648\u062F \u0645\u0648\u0641\u0642");
+        sheet_default.close();
+        await loadUser();
+      } catch (e2) {
+        toast_default.error("\u062E\u0637\u0627: " + e2.message);
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "\u0648\u0631\u0648\u062F";
+        }
+      }
+    });
+    sheet_default.open(form, {
+      title: "\u0648\u0631\u0648\u062F \u0628\u0627 \u0646\u0627\u0645 \u06A9\u0627\u0631\u0628\u0631\u06CC",
+      footer: `
+        <button type="button" class="btn btn-secondary" onclick="this.closest('.sheet-root').querySelector('.sheet-close').click()">\u0627\u0646\u0635\u0631\u0627\u0641</button>
+        <button type="submit" form="${form.id || ""}" class="btn btn-primary">\u0648\u0631\u0648\u062F</button>
+      `
+    });
+    form.querySelector('input[name="username"]')?.focus();
+  }
+  function showRegisterFlow() {
+    const form = document.createElement("form");
+    form.innerHTML = `
+      <div class="input-group">
+        <label>\u0646\u0627\u0645 \u06A9\u0627\u0631\u0628\u0631\u06CC \u062A\u0644\u06AF\u0631\u0627\u0645</label>
+        <input type="text" name="telegram_username" placeholder="\u0645\u062B\u0627\u0644: ali" required autocomplete="off">
+        <div class="input-hint">\u0627\u0628\u062A\u062F\u0627 \u0631\u0628\u0627\u062A \u0645\u0627\u062F\u0631 \u0631\u0627 /start \u06A9\u0646\u06CC\u062F</div>
+      </div>
+      <div class="input-group">
+        <label>\u0646\u0627\u0645 \u06A9\u0627\u0631\u0628\u0631\u06CC \u0648\u0628</label>
+        <input type="text" name="username" placeholder="\u062D\u062F\u0627\u0642\u0644 \u06F3 \u06A9\u0627\u0631\u0627\u06A9\u062A\u0631" required>
+      </div>
+      <div class="input-group">
+        <label>\u0631\u0645\u0632 \u0639\u0628\u0648\u0631</label>
+        <input type="password" name="password" placeholder="\u062D\u062F\u0627\u0642\u0644 \u06F6 \u06A9\u0627\u0631\u0627\u06A9\u062A\u0631" required>
+      </div>
+      <div class="input-group">
+        <label>\u06A9\u062F \u062A\u0623\u06CC\u06CC\u062F (\u06F6 \u0631\u0642\u0645\u06CC)</label>
+        <input type="text" name="code" placeholder="\u06A9\u062F \u0627\u0632 \u0631\u0628\u0627\u062A \u0645\u0627\u062F\u0631" required>
+        <div class="input-hint">\u062F\u06A9\u0645\u0647\u0654 \u0627\u0631\u0633\u0627\u0644 \u06A9\u062F \u0631\u0627 \u0628\u0632\u0646\u06CC\u062F</div>
+        <button type="button" class="btn btn-secondary btn-sm" id="send-code-btn" style="align-self: flex-start;">\u{1F4E8} \u0627\u0631\u0633\u0627\u0644 \u06A9\u062F</button>
+      </div>
+      <div class="input-group">
+        <label>\u06A9\u062F \u0631\u0641\u0631\u0627\u0644 (\u0627\u062E\u062A\u06CC\u0627\u0631\u06CC)</label>
+        <input type="text" name="referral_code" placeholder="\u0627\u06AF\u0631 \u062F\u0627\u0631\u06CC\u062F \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F">
+      </div>
+    `;
+    let currentCode = "";
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const telegramUsername = form.telegram_username.value.trim().replace(/^@/, "");
+      const username = form.username.value.trim();
+      const password = form.password.value;
+      const code = form.code.value.trim();
+      const referralCode = form.referral_code.value.trim();
+      if (!telegramUsername || !username || !password || !code) return;
+      const submitBtn = sheet_default.el?.querySelector('.sheet-footer button[type="submit"]');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = "\u062F\u0631 \u062D\u0627\u0644 \u062B\u0628\u062A\u200C\u0646\u0627\u0645...";
+      }
+      try {
+        await auth_default.register(username, password, telegramUsername, referralCode, code);
+        toast_default.success("\u062B\u0628\u062A\u200C\u0646\u0627\u0645 \u0645\u0648\u0641\u0642! \u{1F389}");
+        sheet_default.close();
+        await loadUser();
+      } catch (e2) {
+        toast_default.error("\u062E\u0637\u0627: " + e2.message);
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "\u062B\u0628\u062A\u200C\u0646\u0627\u0645";
+        }
+      }
+    });
+    const sendCodeBtn = form.querySelector("#send-code-btn");
+    sendCodeBtn?.addEventListener("click", async () => {
+      const tgUsername = form.telegram_username.value.trim().replace(/^@/, "");
+      if (!tgUsername) {
+        toast_default.error("\u0627\u0628\u062A\u062F\u0627 \u0646\u0627\u0645 \u06A9\u0627\u0631\u0628\u0631\u06CC \u062A\u0644\u06AF\u0631\u0627\u0645 \u0631\u0627 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F");
+        return;
+      }
+      sendCodeBtn.disabled = true;
+      sendCodeBtn.textContent = "\u062F\u0631 \u062D\u0627\u0644 \u0627\u0631\u0633\u0627\u0644...";
+      try {
+        const result = await auth_default.sendCode(tgUsername);
+        if (result.sent) {
+          toast_default.success("\u06A9\u062F \u062A\u0623\u06CC\u06CC\u062F \u0627\u0631\u0633\u0627\u0644 \u0634\u062F");
+        } else if (result.code) {
+          currentCode = result.code;
+          toast_default.success("\u06A9\u062F \u062A\u0623\u06CC\u06CC\u062F: " + result.code + " (\u0631\u0628\u0627\u062A \u0645\u0627\u062F\u0631 \u0622\u0645\u0627\u062F\u0647 \u0646\u06CC\u0633\u062A)");
+          form.code.value = result.code;
+        }
+      } catch (e) {
+        toast_default.error("\u062E\u0637\u0627: " + e.message);
+      } finally {
+        sendCodeBtn.disabled = false;
+        sendCodeBtn.textContent = "\u{1F4E8} \u0627\u0631\u0633\u0627\u0644 \u06A9\u062F";
+      }
+    });
+    sheet_default.open(form, {
+      title: "\u062B\u0628\u062A\u200C\u0646\u0627\u0645 \u062D\u0633\u0627\u0628 \u0648\u0628",
+      footer: `
+        <button type="button" class="btn btn-secondary" onclick="this.closest('.sheet-root').querySelector('.sheet-close').click()">\u0627\u0646\u0635\u0631\u0627\u0641</button>
+      `
+    });
+    form.querySelector('input[name="telegram_username"]')?.focus();
+  }
+  function attachEvents() {
+    const logoutBtn = container?.querySelector("#logout-btn");
+    logoutBtn?.addEventListener("click", () => {
+      auth_default.logout();
+      loadUser();
+      toast_default.success("\u0628\u0627 \u0645\u0648\u0641\u0642\u06CC\u062A \u062E\u0627\u0631\u062C \u0634\u062F\u06CC\u062F");
+    });
+    const notifyToggle = container?.querySelector("#notify-toggle");
+    notifyToggle?.addEventListener("change", async () => {
+      try {
+        await api_default.patch("/api/auth/settings", { notify: notifyToggle.checked });
+        toast_default.success("\u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0630\u062E\u06CC\u0631\u0647 \u0634\u062F");
+      } catch (e) {
+        toast_default.error("\u062E\u0637\u0627: " + e.message);
+        notifyToggle.checked = !notifyToggle.checked;
+      }
+    });
+  }
+  function init2(el) {
+    container = el;
+    loadUser();
+    auth_default.onAuthChange(() => {
+      user = null;
+      loadUser();
+    });
+  }
+  return { init: init2 };
+})();
+var profile_default = PROFILE_VIEW;
+
+// src/views/admin.js
+var ADMIN_VIEW = /* @__PURE__ */ (() => {
+  let stats = null;
+  let loading = false;
+  let container = null;
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+  async function loadStats() {
+    if (loading) return;
+    if (!auth_default.getUser()?.is_admin) {
+      stats = null;
+      render();
+      return;
+    }
+    loading = true;
+    render();
+    try {
+      stats = await api_default.get("/api/admin/stats");
+    } catch (e) {
+      toast_default.error("\u062E\u0637\u0627 \u062F\u0631 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u0622\u0645\u0627\u0631: " + e.message);
+      stats = null;
+    } finally {
+      loading = false;
+      render();
+    }
+  }
+  function render() {
+    if (!container) return;
+    let html = `
+      <div class="page-header">
+        <h1 class="page-title">\u067E\u0646\u0644 \u0627\u062F\u0645\u06CC\u0646</h1>
+        <button class="btn btn-secondary btn-sm" id="refresh-btn">\u{1F504}</button>
+      </div>
+    `;
+    if (loading) {
+      html += `<div class="loading-state"><div class="spinner"></div>\u062F\u0631 \u062D\u0627\u0644 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC...</div>`;
+      container.innerHTML = html;
+      return;
+    }
+    if (!stats) {
+      html += `
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">\u062F\u0633\u062A\u0631\u0633\u06CC \u0645\u062D\u062F\u0648\u062F</div>
+          </div>
+          <p class="text-sm text-muted">
+            \u0641\u0642\u0637 \u0627\u062F\u0645\u06CC\u0646\u200C\u0647\u0627 \u0645\u06CC\u200C\u062A\u0648\u0627\u0646\u0646\u062F \u0627\u06CC\u0646 \u0635\u0641\u062D\u0647 \u0631\u0627 \u0628\u0628\u06CC\u0646\u0646\u062F.
+          </p>
+        </div>
+      `;
+      container.innerHTML = html;
+      return;
+    }
+    const u = stats.users || {};
+    const b = stats.bots || {};
+    html += `
+      <div class="row mb-4">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">\u{1F465} \u06A9\u0627\u0631\u0628\u0631\u0627\u0646</div>
+          </div>
+          <div class="property-row"><span class="property-label">\u06A9\u0644 \u06A9\u0627\u0631\u0628\u0631\u0627\u0646</span><span class="property-value">${u.total || 0}</span></div>
+          <div class="property-row"><span class="property-label">\u062B\u0628\u062A\u200C\u0646\u0627\u0645\u200C\u0634\u062F\u0647</span><span class="property-value">${u.registered || 0}</span></div>
+          <div class="property-row"><span class="property-label">\u0641\u0639\u0627\u0644</span><span class="property-value">${u.active || 0}</span></div>
+          <div class="property-row"><span class="property-label">\u0645\u0633\u062F\u0648\u062F</span><span class="property-value">${u.banned || 0}</span></div>
+          <div class="property-row"><span class="property-label">\u0633\u06A9\u0647\u200C\u0647\u0627</span><span class="property-value">${(u.coins || 0).toLocaleString()}</span></div>
+          <div class="property-row"><span class="property-label">\u0627\u0631\u062C\u0627\u0639\u200C\u0647\u0627</span><span class="property-value">${u.referrals || 0}</span></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">\u{1F916} \u0631\u0628\u0627\u062A\u200C\u0647\u0627</div>
+          </div>
+          <div class="property-row"><span class="property-label">\u06A9\u0644 \u0631\u0628\u0627\u062A\u200C\u0647\u0627</span><span class="property-value">${b.total || 0}</span></div>
+          <div class="property-row"><span class="property-label">\u0641\u0639\u0627\u0644</span><span class="property-value">${b.active || 0}</span></div>
+          <div class="property-row"><span class="property-label">\u067E\u06CC\u0627\u0645\u200C \u062F\u0631\u06CC\u0627\u0641\u062A\u06CC</span><span class="property-value">${(b.messages_received || 0).toLocaleString()}</span></div>
+          <div class="property-row"><span class="property-label">\u067E\u06CC\u0627\u0645\u200C \u0627\u0631\u0633\u0627\u0644\u06CC</span><span class="property-value">${(b.messages_sent || 0).toLocaleString()}</span></div>
+          <div class="property-row"><span class="property-label">\u067E\u062E\u0634 \u0647\u0645\u06AF\u0627\u0646\u06CC</span><span class="property-value">${(b.broadcasts_sent || 0).toLocaleString()}</span></div>
+          <div class="property-row"><span class="property-label">\u06A9\u0627\u0631\u0628\u0631\u0627\u0646 \u0631\u0628\u0627\u062A\u200C\u0647\u0627</span><span class="property-value">${b.bot_users || 0}</span></div>
+        </div>
+      </div>
+    `;
+    if (stats.top_bots && stats.top_bots.length > 0) {
+      html += `
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">\u{1F3C6} \u0628\u0631\u062A\u0631\u06CC\u0646 \u0631\u0628\u0627\u062A\u200C\u0647\u0627</div>
+          </div>
+          <div class="table-wrapper">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>\u0631\u0628\u0627\u062A</th>
+                  <th>\u0645\u0627\u0644\u06A9</th>
+                  <th>\u067E\u06CC\u0627\u0645</th>
+                  <th>\u06A9\u0627\u0631\u0628\u0631\u0627\u0646</th>
+                  <th>\u0648\u0636\u0639\u06CC\u062A</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${stats.top_bots.map((bot) => `
+                  <tr>
+                    <td>@${escapeHtml(bot.username || "")}</td>
+                    <td>${escapeHtml(bot.owner_name || "")}</td>
+                    <td>${(bot.messages || 0).toLocaleString()}</td>
+                    <td>${bot.users || 0}</td>
+                    <td>${bot.is_active ? '<span class="badge badge-success">\u0641\u0639\u0627\u0644</span>' : '<span class="badge badge-neutral">\u063A\u06CC\u0631\u0641\u0639\u0627\u0644</span>'}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+    if (stats.top_users && stats.top_users.length > 0) {
+      html += `
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">\u{1F3C6} \u0628\u0631\u062A\u0631\u06CC\u0646 \u06A9\u0627\u0631\u0628\u0631\u0627\u0646</div>
+          </div>
+          <div class="table-wrapper">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>\u06A9\u0627\u0631\u0628\u0631</th>
+                  <th>\u0631\u0628\u0627\u062A\u200C\u0647\u0627</th>
+                  <th>\u0633\u06A9\u0647</th>
+                  <th>\u0648\u0636\u0639\u06CC\u062A</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${stats.top_users.map((u2) => `
+                  <tr>
+                    <td>${escapeHtml(u2.name || "")} <span class="text-muted">@${escapeHtml(u2.username || "")}</span></td>
+                    <td>${u2.bots_count || 0}</td>
+                    <td>${(u2.coins || 0).toLocaleString()}</td>
+                    <td>
+                      ${u2.is_banned ? '<span class="badge badge-danger">\u0645\u0633\u062F\u0648\u062F</span>' : ""}
+                      ${u2.is_admin ? '<span class="badge badge-primary">\u0627\u062F\u0645\u06CC\u0646</span>' : ""}
+                      ${!u2.is_banned && !u2.is_admin ? '<span class="badge badge-success">\u0641\u0639\u0627\u0644</span>' : ""}
+                    </td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+    container.innerHTML = html;
+    attachEvents();
+  }
+  function attachEvents() {
+    const refreshBtn = container?.querySelector("#refresh-btn");
+    refreshBtn?.addEventListener("click", loadStats);
+  }
+  function init2(el) {
+    container = el;
+    loadStats();
+    auth_default.onAuthChange(() => {
+      if (auth_default.isAuthenticated()) {
+        loadStats();
+      }
+    });
+  }
+  return { init: init2, loadStats };
+})();
+var admin_default = ADMIN_VIEW;
+
+// src/main.js
+api_default.setBaseUrl(config_default.API_URL);
+var TAB_ROUTES = {
+  bots: "/bots",
+  studio: "/studio",
+  profile: "/profile",
+  admin: "/admin"
+};
+function updateTabbar(route) {
+  const tabs = document.querySelectorAll(".tabbar .tab");
+  tabs.forEach((tab) => {
+    const routeKey = tab.dataset.route;
+    const targetPath = TAB_ROUTES[routeKey];
+    const isActive = route === targetPath || routeKey === "studio" && route.startsWith("/studio");
+    tab.classList.toggle("active", isActive);
+  });
+}
+function updateAdminTab() {
+  const adminTab = document.getElementById("admin-tab");
+  if (!adminTab) return;
+  const user = auth_default.getUser();
+  const show = !!(user && user.is_admin);
+  adminTab.style.display = show ? "flex" : "none";
+  if (!show && router_default.getCurrentRoute() === "/admin") {
+    router_default.navigate("/bots");
+  }
+}
+function initTabbar() {
+  const tabbar = document.querySelector(".tabbar");
+  if (!tabbar) return;
+  const tabs = tabbar.querySelectorAll(".tab");
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const route = tab.dataset.route;
+      if (route === "bots") router_default.navigate("/bots");
+      else if (route === "profile") router_default.navigate("/profile");
+      else if (route === "studio") router_default.navigate("/bots");
+      else if (route === "admin") router_default.navigate("/admin");
+    });
+  });
+}
+async function init() {
+  await auth_default.tryAutoLogin();
+  updateAdminTab();
+  auth_default.onAuthChange(() => {
+    updateAdminTab();
+  });
+  router_default.onBeforeEach(async (path) => {
+    const requiresAuth = path.startsWith("/studio");
+    if (requiresAuth && !auth_default.isAuthenticated()) {
+      router_default.navigate("/profile");
+      return false;
+    }
+    if (path === "/admin" && !auth_default.getUser()?.is_admin) {
+      router_default.navigate("/bots");
+      return false;
+    }
+    return true;
+  });
+  router_default.onAfterEach(() => {
+    updateTabbar(router_default.getCurrentRoute());
+  });
+  router_default.onNotFound(() => {
+    const view = document.getElementById("view");
+    view.innerHTML = '<div class="empty-state"><div class="empty-state-icon">\u2753</div><div class="empty-state-title">\u0635\u0641\u062D\u0647 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F</div></div>';
+    updateTabbar("/");
+  });
+  router_default.addRoute("/", () => router_default.navigate("/bots"));
+  router_default.addRoute("/bots", async () => {
+    const view = document.getElementById("view");
+    await bots_default.init(view);
+  });
+  router_default.addRoute("/studio", () => router_default.navigate("/bots"));
+  router_default.addRoute("/studio/:bot_id", async (params) => {
+    const view = document.getElementById("view");
+    await studio_default.init(view, params.bot_id);
+  });
+  router_default.addRoute("/profile", async () => {
+    const view = document.getElementById("view");
+    profile_default.init(view);
+  });
+  router_default.addRoute("/admin", async () => {
+    const view = document.getElementById("view");
+    if (!auth_default.getUser()?.is_admin) {
+      view.innerHTML = '<div class="empty-state"><div class="empty-state-icon">\u{1F6AB}</div><div class="empty-state-title">\u062F\u0633\u062A\u0631\u0633\u06CC \u0645\u062D\u062F\u0648\u062F</div></div>';
+    } else {
+      admin_default.init(view);
+    }
+  });
+  initTabbar();
+  if (window.Telegram?.WebApp?.ready) {
+    window.Telegram.WebApp.ready();
+  }
+  router_default.start();
+}
+init();
+window.GramSaz = {
+  API: api_default,
+  AUTH: auth_default,
+  ROUTER: router_default,
+  TOAST: toast_default,
+  config: config_default
+};
+export {
+  api_default as API,
+  auth_default as AUTH,
+  router_default as ROUTER,
+  toast_default as TOAST,
+  config_default as config
+};

@@ -93,24 +93,23 @@ function initTabbar() {
       const route = tab.dataset.route;
       if (route === 'bots') ROUTER.navigate('/bots');
       else if (route === 'profile') ROUTER.navigate('/profile');
-      else if (route === 'studio' && AUTH.isAuthenticated()) ROUTER.navigate('/bots');
+      else if (route === 'studio') ROUTER.navigate('/studio');
       else if (route === 'admin') ROUTER.navigate('/admin');
     });
   });
 }
 
 async function init() {
-  await AUTH.tryAutoLogin();
-  updateAdminTab();
+  initTabbar();
 
-  AUTH.onAuthChange(() => {
-    updateAdminTab();
-  });
+  if (window.Telegram?.WebApp?.ready) {
+    window.Telegram.WebApp.ready();
+  }
 
   ROUTER.onBeforeEach(async (path) => {
-    const requiresAuth = path.startsWith('/profile') || path === '/admin' || path.startsWith('/studio');
+    const requiresAuth = path.startsWith('/studio');
     if (requiresAuth && !AUTH.isAuthenticated()) {
-      ROUTER.navigate('/bots');
+      ROUTER.navigate('/profile');
       return false;
     }
     if (path === '/admin' && !AUTH.getUser()?.is_admin) {
@@ -153,11 +152,12 @@ async function init() {
     }
   });
 
-  initTabbar();
+  await AUTH.tryAutoLogin();
+  updateAdminTab();
 
-  if (window.Telegram?.WebApp?.ready) {
-    window.Telegram.WebApp.ready();
-  }
+  AUTH.onAuthChange(() => {
+    updateAdminTab();
+  });
 
   ROUTER.start();
 }

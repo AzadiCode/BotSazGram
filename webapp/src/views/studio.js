@@ -994,9 +994,11 @@ const STUDIO_VIEW = (() => {
         TOAST.error('هیچ تغییری نیست');
         return;
       }
-      const submitBtn = form.querySelector('button[type="submit"]');
-      submitBtn.disabled = true;
-      submitBtn.textContent = 'در حال ذخیره...';
+      const submitBtn = SHEET.el?.querySelector('.sheet-footer button[type="submit"]');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'در حال ذخیره...';
+      }
       try {
         await API.patch(`/api/bots/${botId}/ai-config`, payload);
         TOAST.success('تنظیمات AI ذخیره شد');
@@ -1006,8 +1008,10 @@ const STUDIO_VIEW = (() => {
       } catch (err) {
         TOAST.error('خطا: ' + err.message);
       } finally {
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'ذخیره';
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'ذخیره';
+        }
       }
     });
 

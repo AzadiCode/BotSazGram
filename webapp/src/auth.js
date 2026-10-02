@@ -122,11 +122,9 @@ const AUTH = (() => {
   async function logout() {
     const token = API.getAuthToken();
     if (token) {
-      try {
-        await API.post('/api/auth/logout');
-      } catch (e) {
+      API.post('/api/auth/logout').catch(e => {
         console.warn('Logout API error:', e);
-      }
+      });
     }
     currentUser = null;
     API.setAuthToken(null);

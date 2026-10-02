@@ -1,6 +1,7 @@
 const SHEET = (() => {
   const root = document.getElementById('sheet-root');
   let currentSheet = null;
+  let sheetSeq = 0;
 
   function createSheet(content, options = {}) {
     if (!root) return null;
@@ -31,12 +32,24 @@ const SHEET = (() => {
       contentEl.appendChild(content);
     }
 
+    // اگر محتوا یک فرم است، به آن id بده تا دکمه‌های footer بتوانند
+    // با ویژگی form="" به آن وصل شوند و submit واقعاً کار کند.
+    const formEl = content instanceof HTMLFormElement ? content : null;
+    if (formEl && !formEl.id) {
+      formEl.id = `gs-sheet-form-${++sheetSeq}`;
+    }
+
     if (footer) {
       const footerEl = el.querySelector('.sheet-footer');
       if (typeof footer === 'string') {
         footerEl.innerHTML = footer;
       } else if (footer instanceof Node) {
         footerEl.appendChild(footer);
+      }
+      if (formEl) {
+        footerEl.querySelectorAll('button[type="submit"]').forEach(btn => {
+          btn.setAttribute('form', formEl.id);
+        });
       }
     }
 
@@ -81,6 +94,7 @@ const SHEET = (() => {
   return {
     open: createSheet,
     close: closeSheet,
+    get el() { return currentSheet?.el || null; },
   };
 })();
 

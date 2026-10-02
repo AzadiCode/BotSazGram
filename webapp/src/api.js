@@ -39,8 +39,19 @@ const API = (() => {
       headers: getHeaders(options.headers),
     };
 
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => {
+        const error = new Error('خطای شبکه — سرور در دسترس نیست');
+        error.isNetworkError = true;
+        reject(error);
+      }, 10000);
+    });
+
     try {
-      const response = await fetch(url, config);
+      const response = await Promise.race([
+        fetch(url, config),
+        timeoutPromise,
+      ]);
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {

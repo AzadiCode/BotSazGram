@@ -1,10 +1,33 @@
 const ROUTER = (() => {
+  // اگر سایت در زیرپوشه دپلوی شده باشد (مثلاً /user/repo/ یا /app/),
+  // مسیر پایه از همان آدرس index.html استخراج می‌شود تا pushState
+  // مسیرهای اشتباه مثل https://domain/bots نسازد.
+  const BASE = (() => {
+    try {
+      const p = new URL(document.baseURI).pathname;
+      return p.replace(/[^/]*$/, '');
+    } catch (e) {
+      return '/';
+    }
+  })();
+
   const routes = new Map();
   let currentRoute = null;
   let currentParams = {};
   let beforeEachHooks = [];
   let afterEachHooks = [];
   let notFoundHandler = null;
+
+  function withBase(path) {
+    return BASE + path.replace(/^\//, '');
+  }
+
+  function stripBase(path) {
+    if (BASE !== '/' && path.startsWith(BASE)) {
+      return '/' + path.slice(BASE.length);
+    }
+    return path;
+  }
 
   function parseRoute(path) {
     const paramNames = [];
@@ -36,28 +59,29 @@ const ROUTER = (() => {
   }
 
   async function navigate(path, replace = false) {
-    const match = matchRoute(path);
+    const route = stripBase(path);
+    const match = matchRoute(route);
     if (!match) {
       if (notFoundHandler) {
-        await notFoundHandler(path);
+        await notFoundHandler(route);
       } else {
-        console.warn('Route not found:', path);
+        console.warn('Route not found:', route);
       }
       return false;
     }
 
     for (const hook of beforeEachHooks) {
-      const result = await hook(path, match.params);
+      const result = await hook(route, match.params);
       if (result === false) return false;
     }
 
     if (replace) {
-      history.replaceState(null, '', path);
+      history.replaceState(null, '', withBase(route));
     } else {
-      history.pushState(null, '', path);
+      history.pushState(null, '', withBase(route));
     }
 
-    currentRoute = path;
+    currentRoute = route;
     currentParams = match.params;
 
     try {
@@ -67,7 +91,7 @@ const ROUTER = (() => {
     }
 
     for (const hook of afterEachHooks) {
-      await hook(path, match.params);
+      await hook(route, match.params);
     }
 
     return true;
